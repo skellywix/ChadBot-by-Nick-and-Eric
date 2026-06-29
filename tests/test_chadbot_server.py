@@ -57,6 +57,54 @@ def test_build_script_command_applies_runtime_settings(monkeypatch, tmp_path):
     assert env["CHADBOT_TEMPLATE_SCALES"] == "1,0.75"
 
 
+def test_build_script_command_rejects_missing_required_script_args(monkeypatch, tmp_path):
+    root = tmp_path
+    script_dir = root / "scripts" / "demo"
+    script_dir.mkdir(parents=True)
+    script_path = script_dir / "demo.py"
+    script_path.write_text(
+        "\n".join([
+            "import argparse",
+            "def parse_args():",
+            "    parser = argparse.ArgumentParser(description='Demo script')",
+            "    parser.add_argument('template', help='Template image')",
+            "    return parser.parse_args()",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "REPO_ROOT", root)
+
+    with pytest.raises(ValueError, match="Required: template"):
+        server.build_script_command(script_path)
+
+    command, _, _ = server.build_script_command(script_path, args=["needle.png"])
+    assert command[-1] == "needle.png"
+
+
+def test_script_argument_metadata_reports_optional_flags(monkeypatch, tmp_path):
+    root = tmp_path
+    script_dir = root / "scripts" / "demo"
+    script_dir.mkdir(parents=True)
+    script_path = script_dir / "demo.py"
+    script_path.write_text(
+        "\n".join([
+            "from argparse import ArgumentParser",
+            "parser = ArgumentParser(description='Record actions')",
+            "parser.add_argument('-o', '--output', default='bank_fish', help='Output filename')",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "REPO_ROOT", root)
+
+    metadata = server.script_argument_metadata(script_path)
+
+    assert metadata["description"] == "Record actions"
+    assert metadata["required"] == []
+    assert metadata["arguments"][0]["name"] == "output"
+    assert metadata["arguments"][0]["flags"] == ["-o", "--output"]
+    assert "--output <value>" in metadata["example"]
+
+
 def test_analyze_script_reports_missing_assets_without_running_script(monkeypatch, tmp_path):
     root = tmp_path
     script_dir = root / "scripts" / "demo"
@@ -94,6 +142,7 @@ def test_analyze_script_reports_missing_assets_without_running_script(monkeypatc
     assert references[("templates", "folder")]["status"] == "ok"
     assert references[("missing.png", "read")]["status"] == "missing"
     assert references[("capture.png", "write")]["status"] == "generated"
+    assert analysis["launch"]["arguments"] == []
     assert analysis["summary"]["missing"] == 1
     assert any(warning["label"] == "Missing asset" for warning in analysis["warnings"])
 

@@ -38,6 +38,7 @@ const el = {
   templateScaleValue: document.querySelector("#templateScaleValue"),
   scriptDirValue: document.querySelector("#scriptDirValue"),
   scriptArgs: document.querySelector("#scriptArgs"),
+  scriptArgsHelp: document.querySelector("#scriptArgsHelp"),
   baseWidthInput: document.querySelector("#baseWidthInput"),
   baseHeightInput: document.querySelector("#baseHeightInput"),
   templateScalesInput: document.querySelector("#templateScalesInput"),
@@ -234,6 +235,64 @@ function renderRunState(status = {}) {
   }
 }
 
+function scriptLaunchMetadata() {
+  if (!state.selectedScript || state.scriptAnalysis?.script?.path !== state.selectedScript.path) {
+    return null;
+  }
+  return state.scriptAnalysis.launch || null;
+}
+
+function currentScriptArgs() {
+  try {
+    return parseCommandArgs(el.scriptArgs.value);
+  } catch {
+    return [];
+  }
+}
+
+function missingRequiredScriptArgs(args = currentScriptArgs()) {
+  const launch = scriptLaunchMetadata();
+  if (!launch) {
+    return [];
+  }
+  const requiredPositionals = launch.required.filter((argument) => argument.positional);
+  const suppliedPositionals = args.filter((arg) => !arg.startsWith("-"));
+  return requiredPositionals.slice(suppliedPositionals.length).map((argument) => argument.name);
+}
+
+function renderScriptArgsHelp() {
+  const selected = state.selectedScript;
+  const launch = scriptLaunchMetadata();
+  if (!selected) {
+    el.scriptArgs.placeholder = "Optional arguments";
+    el.scriptArgsHelp.innerHTML = "";
+    return;
+  }
+  if (!launch) {
+    el.scriptArgs.placeholder = "Checking script arguments";
+    el.scriptArgsHelp.innerHTML = '<span>Checking script arguments.</span>';
+    return;
+  }
+
+  el.scriptArgs.placeholder = launch.example || "Optional arguments";
+  if (!launch.arguments.length) {
+    el.scriptArgsHelp.innerHTML = '<span>No script arguments detected.</span>';
+    return;
+  }
+
+  const missing = missingRequiredScriptArgs();
+  const required = launch.required.map((argument) => argument.name).join(", ");
+  const optional = launch.arguments
+    .filter((argument) => !argument.required)
+    .map((argument) => argument.flags?.join(", ") || argument.name)
+    .join(", ");
+  el.scriptArgsHelp.innerHTML = `
+    ${required ? `<span class="${missing.length ? "missing" : "ready"}"><strong>Required:</strong> ${escapeHtml(required)}</span>` : ""}
+    ${optional ? `<span><strong>Optional:</strong> ${escapeHtml(optional)}</span>` : ""}
+    ${launch.description ? `<span>${escapeHtml(launch.description)}</span>` : ""}
+  `;
+}
+
 function renderPortability() {
   const portability = state.portability || state.health?.portability;
   if (!portability) {
@@ -315,6 +374,7 @@ function renderScriptAnalysis() {
     el.scriptAnalysisStatus.textContent = "Select";
     el.scriptAnalysisSummary.innerHTML = "";
     el.scriptAnalysisAssets.innerHTML = '<div class="empty-state">No script selected.</div>';
+    renderScriptArgsHelp();
     return;
   }
 
@@ -324,6 +384,7 @@ function renderScriptAnalysis() {
     el.scriptAnalysisStatus.textContent = "Checking";
     el.scriptAnalysisSummary.innerHTML = "";
     el.scriptAnalysisAssets.innerHTML = '<div class="empty-state">Checking selected script.</div>';
+    renderScriptArgsHelp();
     return;
   }
 
@@ -367,6 +428,7 @@ function renderScriptAnalysis() {
   el.scriptAnalysisAssets.innerHTML = warnings || assets
     ? `${warnings}${assets}${overflow}`
     : '<div class="empty-state">No local assets referenced.</div>';
+  renderScriptArgsHelp();
 }
 
 function renderSetupStatus(status = {}) {
@@ -516,6 +578,12 @@ async function startScript() {
     args = parseCommandArgs(el.scriptArgs.value);
   } catch (error) {
     showToast(error.message);
+    return;
+  }
+  const missingArgs = missingRequiredScriptArgs(args);
+  if (missingArgs.length) {
+    showToast(`Missing required script args: ${missingArgs.join(", ")}`);
+    renderScriptArgsHelp();
     return;
   }
   const status = await api("/api/process/start", {
@@ -775,6 +843,7 @@ function bindEvents() {
   document.querySelector("#refreshScripts").addEventListener("click", () => refreshScriptsAndHealth().catch((error) => showToast(error.message)));
   document.querySelector("#refreshFiles").addEventListener("click", () => refreshFiles().catch((error) => showToast(error.message)));
   el.scriptSearch.addEventListener("input", renderScripts);
+  el.scriptArgs.addEventListener("input", renderScriptArgsHelp);
   el.fileSearch.addEventListener("input", renderFiles);
   el.editor.addEventListener("input", () => {
     state.fileContent = el.editor.value;

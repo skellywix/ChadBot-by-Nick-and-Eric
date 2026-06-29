@@ -515,10 +515,109 @@ def discover_editable_files(root: Path | None = None) -> list[dict]:
     return files
 
 
+class ArgumentValidationParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise ValueError(message)
+
+
+def literal_ast_value(node: ast.AST) -> object | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (str, int, float, bool)):
+        return node.value
+    return None
+
+
+def keyword_literal(node: ast.Call, name: str) -> object | None:
+    for keyword in node.keywords:
+        if keyword.arg == name:
+            return literal_ast_value(keyword.value)
+    return None
+
+
+def script_argument_metadata(script_path: Path) -> dict:
+    if not is_discoverable_script(script_path):
+        raise ValueError("Only discovered Python bot scripts can be inspected.")
+
+    source = script_path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source, filename=repo_relative(script_path))
+    except SyntaxError:
+        return {"description": "", "arguments": [], "required": [], "example": ""}
+
+    description = ""
+    arguments = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = ast_call_name(node.func)
+        if call_name.endswith("ArgumentParser"):
+            value = keyword_literal(node, "description")
+            description = str(value or "")
+        if not call_name.endswith("add_argument"):
+            continue
+
+        tokens = [arg.value for arg in node.args if isinstance(arg, ast.Constant) and isinstance(arg.value, str)]
+        if not tokens:
+            continue
+        positional = not tokens[0].startswith("-")
+        nargs = keyword_literal(node, "nargs")
+        required = bool(keyword_literal(node, "required")) if not positional else nargs not in {"?", "*"}
+        default = keyword_literal(node, "default")
+        help_text = keyword_literal(node, "help")
+        name = tokens[0] if positional else max(tokens, key=len).lstrip("-").replace("-", "_")
+        arguments.append({
+            "name": name,
+            "tokens": tokens,
+            "flags": [] if positional else tokens,
+            "positional": positional,
+            "required": required,
+            "default": default,
+            "help": str(help_text or ""),
+            "nargs": nargs,
+        })
+
+    required = [argument for argument in arguments if argument["required"]]
+    example_parts = []
+    for argument in arguments:
+        if argument["positional"] and argument["required"]:
+            example_parts.append(f"<{argument['name']}>")
+        elif not argument["positional"]:
+            flag = argument["flags"][-1] if argument["flags"] else f"--{argument['name']}"
+            example_parts.append(f"{flag} <value>")
+    return {
+        "description": description,
+        "arguments": arguments,
+        "required": required,
+        "example": " ".join(example_parts),
+    }
+
+
+def validate_script_args(script_path: Path, args: list[str]) -> None:
+    metadata = script_argument_metadata(script_path)
+    if not metadata["arguments"]:
+        return
+
+    parser = ArgumentValidationParser(prog=script_path.name, add_help=False)
+    for argument in metadata["arguments"]:
+        kwargs = {}
+        if argument["nargs"] is not None:
+            kwargs["nargs"] = str(argument["nargs"])
+        if not argument["positional"] and argument["required"]:
+            kwargs["required"] = True
+        parser.add_argument(*argument["tokens"], **kwargs)
+
+    try:
+        parser.parse_known_args(args)
+    except ValueError as exc:
+        missing = ", ".join(argument["name"] for argument in metadata["required"])
+        detail = f" Required: {missing}." if missing else ""
+        raise ValueError(f"Script arguments are incomplete for {repo_relative(script_path)}.{detail}") from exc
+
+
 def build_script_command(script_path: Path, args: list[str] | None = None) -> tuple[list[str], Path, dict]:
     if not is_discoverable_script(script_path):
         raise ValueError("Only discovered Python bot scripts can be started.")
     run_args = [str(arg) for arg in (args or [])]
+    validate_script_args(script_path, run_args)
     cwd = script_path.parent
     env = os.environ.copy()
     current_pythonpath = env.get("PYTHONPATH")
@@ -798,6 +897,7 @@ def analyze_script(relative_script: str) -> dict:
             "status": "error",
             "imports": [],
             "importsFunctions": False,
+            "launch": script_argument_metadata(script_path),
             "assetReferences": [],
             "warnings": [{
                 "status": "error",
@@ -898,6 +998,7 @@ def analyze_script(relative_script: str) -> dict:
         "status": status_from_checks(checks),
         "imports": imports,
         "importsFunctions": imports_functions,
+        "launch": script_argument_metadata(script_path),
         "assetReferences": references,
         "warnings": warnings,
         "summary": {

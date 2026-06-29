@@ -555,6 +555,43 @@ button:disabled:hover {
   font-size: 13px;
 }
 
+.args-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -6px 14px 14px;
+  min-height: 24px;
+}
+
+.args-help span {
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px 8px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #0b100f;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.args-help strong {
+  color: var(--text);
+}
+
+.args-help .missing {
+  border-color: rgb(255 103 95 / 30%);
+  color: #ffd8d5;
+}
+
+.args-help .ready {
+  border-color: rgb(123 214 109 / 26%);
+  color: #d8ffd2;
+}
+
 .settings-panel {
   margin: 0 14px 14px;
   padding: 12px;
