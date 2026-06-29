@@ -138,6 +138,20 @@
             </div>
           </div>
 
+          <div class="diagnostics-panel" id="diagnosticsPanel">
+            <div class="section-head tight">
+              <h3>Readiness</h3>
+              <div class="diagnostics-head">
+                <span class="readiness-badge" id="diagnosticsStatus">Checking</span>
+                <button class="mini-button" id="refreshDiagnostics" title="Refresh readiness" aria-label="Refresh readiness">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.8-4.2L13 11h8V3z"></path></svg>
+                </button>
+              </div>
+            </div>
+            <div class="diagnostics-summary" id="diagnosticsSummary"></div>
+            <div class="diagnostics-checks" id="diagnosticsChecks"></div>
+          </div>
+
           <div class="tabs">
             <button class="tab active" data-view="logs">Live Logs</button>
             <button class="tab" data-view="validation">Validation</button>

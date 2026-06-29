@@ -533,6 +533,122 @@ button:disabled:hover {
   margin-top: 12px;
 }
 
+.diagnostics-panel {
+  margin: 0 14px 14px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #101615;
+}
+
+.diagnostics-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.readiness-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid rgb(123 214 109 / 36%);
+  border-radius: 999px;
+  background: rgb(123 214 109 / 9%);
+  color: #d8ffd2;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.readiness-badge.warn {
+  border-color: rgb(210 184 79 / 40%);
+  background: rgb(210 184 79 / 10%);
+  color: #f5e7a0;
+}
+
+.readiness-badge.error {
+  border-color: rgb(255 103 95 / 42%);
+  background: rgb(255 103 95 / 10%);
+  color: #ffd8d5;
+}
+
+.diagnostics-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.diagnostic-pill {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #0b100f;
+}
+
+.diagnostic-pill span,
+.diagnostic-row small {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-pill strong,
+.diagnostic-row strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostics-checks {
+  display: grid;
+  gap: 6px;
+}
+
+.diagnostic-row {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: #0c1211;
+}
+
+.diagnostic-row.warn {
+  border-color: rgb(210 184 79 / 22%);
+}
+
+.diagnostic-row.error {
+  border-color: rgb(255 103 95 / 24%);
+}
+
+.diagnostic-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.diagnostic-row.warn .diagnostic-dot {
+  background: var(--amber);
+}
+
+.diagnostic-row.error .diagnostic-dot {
+  background: var(--red);
+}
+
 .tabs {
   display: flex;
   gap: 4px;
@@ -679,7 +795,8 @@ button:disabled:hover {
   .run-grid,
   .portability-grid,
   .args-field,
-  .settings-grid {
+  .settings-grid,
+  .diagnostics-summary {
     grid-template-columns: 1fr;
   }
 
