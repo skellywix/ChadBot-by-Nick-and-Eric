@@ -644,6 +644,8 @@ def evaluate_path_expression(node: ast.AST, assignments: dict[str, dict], script
         call_name = ast_call_name(node.func)
         if call_name in {"Path", "pathlib.Path"} and node.args:
             return evaluate_path_expression(node.args[0], assignments, script_path)
+        if call_name in {"str", "builtins.str"} and node.args:
+            return evaluate_path_expression(node.args[0], assignments, script_path)
         if call_name == "os.path.dirname" and node.args:
             source = evaluate_path_expression(node.args[0], assignments, script_path)
             if source:
@@ -701,6 +703,10 @@ def path_values_from_node(node: ast.AST, assignments: dict[str, dict], script_pa
                 values.append(part)
         return values
     return []
+
+
+def unresolved_name_reference(node: ast.AST, assignments: dict[str, dict]) -> bool:
+    return isinstance(node, ast.Name) and node.id not in assignments
 
 
 def has_asset_extension(value: object) -> bool:
@@ -815,6 +821,8 @@ def analyze_script(relative_script: str) -> dict:
         name = normalize_call_name(raw_name, aliases)
         if name in WRITE_PATH_CALLS:
             usage = "write"
+        elif name.endswith(".save"):
+            usage = "write"
         elif name in FOLDER_PATH_CALLS:
             usage = "folder"
         elif name in READ_PATH_CALLS:
@@ -848,7 +856,8 @@ def analyze_script(relative_script: str) -> dict:
                 seen_references.add(key)
                 references.append(reference)
 
-        if usage in {"read", "folder"} and path_args and not resolved_any:
+        unresolved_dynamic = all(unresolved_name_reference(arg, assignments) for arg, _ in path_args)
+        if usage in {"read", "folder"} and path_args and not resolved_any and not unresolved_dynamic:
             warnings.append({
                 "status": "warn",
                 "label": "Dynamic path",

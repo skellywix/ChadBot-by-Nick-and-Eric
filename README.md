@@ -51,7 +51,7 @@ Safety boundaries:
 - `Recorder.py`: records mouse and keyboard events into JSON files under `Recordings/`. Press `F10` to stop recording.
 - `world_hopper.py`: reads RuneLite world-list rows, filters candidate worlds by membership, activity, population, ping, and a local cooldown travel log.
 - `digit_extractor.py`: small image-template digit reader used by the world hopper.
-- `video_capture.py`: live OpenCV capture loop for detecting a template image on screen.
+- `video_capture.py`: live OpenCV capture loop for detecting a template image on screen. Pass the template path as the first script argument, for example `scripts/minnows/minnow.png`.
 - `scripts/`: individual automation scripts for activities such as agility courses, fishing, mining, construction, blast furnace, world hopping support, and inventory sorting.
 - `testing/` and `opencv/`: older experiments and learning scripts.
 
