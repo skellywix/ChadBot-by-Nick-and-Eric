@@ -57,6 +57,7 @@ DEFAULT_BASE_HEIGHT = 1080
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off", ""}
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png"}
+REQUIREMENTS_FILES = (REPO_ROOT / "requirements.txt", REPO_ROOT / "requirements-dev.txt")
 RUNTIME_DEPENDENCIES = (
     {"id": "pyautogui", "label": "PyAutoGUI", "module": "pyautogui", "required": True},
     {"id": "opencv", "label": "OpenCV", "module": "cv2", "required": True},
@@ -367,6 +368,18 @@ def runtime_diagnostics(
     }
 
 
+def setup_requirements_command() -> list[str]:
+    missing_files = [path for path in REQUIREMENTS_FILES if not path.exists()]
+    if missing_files:
+        missing = missing_files[0].resolve()
+        label = repo_relative(missing) if is_relative_to(missing, REPO_ROOT) else str(missing)
+        raise FileNotFoundError(f"Missing requirements file: {label}")
+    command = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check"]
+    for path in REQUIREMENTS_FILES:
+        command.extend(["-r", str(path)])
+    return command
+
+
 def is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -585,6 +598,115 @@ class ProcessManager:
         return {"latest": latest, "logs": logs}
 
 
+class SetupManager:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._process: subprocess.Popen | None = None
+        self._started_at: float | None = None
+        self._finished_at: float | None = None
+        self._return_code: int | None = None
+        self._logs: deque[dict] = deque(maxlen=3000)
+        self._next_log_id = 0
+
+    def _append_log(self, text: str, level: str = "info") -> None:
+        with self._lock:
+            self._next_log_id += 1
+            self._logs.append(
+                {
+                    "id": self._next_log_id,
+                    "time": time.time(),
+                    "level": level,
+                    "text": text.rstrip("\n"),
+                }
+            )
+
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._process is not None and self._process.poll() is None
+
+    def install_requirements(self) -> dict:
+        command = setup_requirements_command()
+
+        with self._lock:
+            if self.is_running():
+                raise RuntimeError("Setup is already running.")
+            self._logs.clear()
+            self._started_at = time.time()
+            self._finished_at = None
+            self._return_code = None
+            self._append_log("Installing Python requirements")
+            self._append_log(" ".join(command))
+            self._process = subprocess.Popen(
+                command,
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+
+        threading.Thread(target=self._read_output, daemon=True).start()
+        return self.status()
+
+    def _read_output(self) -> None:
+        process = self._process
+        if process is None:
+            return
+        try:
+            if process.stdout:
+                for line in process.stdout:
+                    self._append_log(line, level="output")
+            return_code = process.wait()
+            self._append_log(f"Setup exited with code {return_code}", level="exit" if return_code == 0 else "error")
+            with self._lock:
+                self._return_code = return_code
+                self._finished_at = time.time()
+        finally:
+            with self._lock:
+                if self._process is process:
+                    self._process = None
+
+    def status(self) -> dict:
+        with self._lock:
+            running = self._process is not None and self._process.poll() is None
+            return {
+                "running": running,
+                "startedAt": self._started_at,
+                "finishedAt": self._finished_at,
+                "returnCode": self._return_code,
+                "uptime": (time.time() - self._started_at) if running and self._started_at else 0,
+            }
+
+    def logs(self, after: int = 0) -> dict:
+        with self._lock:
+            logs = [entry for entry in self._logs if entry["id"] > after]
+            latest = self._next_log_id
+        return {"latest": latest, "logs": logs}
+
+    def stop(self) -> dict:
+        with self._lock:
+            process = self._process
+            if process is None or process.poll() is not None:
+                self._process = None
+                return self.status()
+            self._append_log("Stopping setup process", level="warn")
+            process.terminate()
+
+        try:
+            process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            self._append_log("Setup did not exit after terminate; killing it", level="warn")
+            process.kill()
+            process.wait(timeout=5)
+
+        with self._lock:
+            self._return_code = process.returncode
+            self._finished_at = time.time()
+            if self._process is process:
+                self._process = None
+        return self.status()
+
+
 def run_check(check_name: str) -> dict:
     commands = {
         "compile": [sys.executable, "-m", "compileall", "-q", "."],
@@ -637,6 +759,10 @@ class ChadBotHandler(BaseHTTPRequestHandler):
     def manager(self) -> ProcessManager:
         return self.server.process_manager  # type: ignore[attr-defined]
 
+    @property
+    def setup_manager(self) -> SetupManager:
+        return self.server.setup_manager  # type: ignore[attr-defined]
+
     def _handle_api_get(self, path: str, query: dict) -> None:
         if path == "/api/health":
             self._json({
@@ -668,6 +794,11 @@ class ChadBotHandler(BaseHTTPRequestHandler):
         elif path == "/api/process/logs":
             after = int(self._first_query_value(query, "after", default="0"))
             self._json(self.manager.logs(after=after))
+        elif path == "/api/setup/status":
+            self._json(self.setup_manager.status())
+        elif path == "/api/setup/logs":
+            after = int(self._first_query_value(query, "after", default="0"))
+            self._json(self.setup_manager.logs(after=after))
         else:
             self._json({"error": "Not found"}, status=404)
 
@@ -692,6 +823,8 @@ class ChadBotHandler(BaseHTTPRequestHandler):
             self._json({"settings": settings, "portability": portability_config(settings)})
         elif path == "/api/checks/run":
             self._json(run_check(payload.get("check", "")))
+        elif path == "/api/setup/install":
+            self._json(self.setup_manager.install_requirements())
         else:
             self._json({"error": "Not found"}, status=404)
 
@@ -751,11 +884,13 @@ class ChadBotHandler(BaseHTTPRequestHandler):
 
 class ChadBotServer(ThreadingHTTPServer):
     process_manager: ProcessManager
+    setup_manager: SetupManager
 
 
 def create_server(host: str, port: int) -> ChadBotServer:
     server = ChadBotServer((host, port), ChadBotHandler)
     server.process_manager = ProcessManager()
+    server.setup_manager = SetupManager()
     return server
 
 
@@ -785,6 +920,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\nStopping ChadBot")
     finally:
         server.process_manager.stop()
+        server.setup_manager.stop()
         server.server_close()
     return 0
 

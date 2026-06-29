@@ -544,7 +544,14 @@ button:disabled:hover {
 .diagnostics-head {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.diagnostics-head .text-button {
+  min-height: 34px;
+  padding: 0 10px;
 }
 
 .readiness-badge {

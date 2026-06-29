@@ -143,6 +143,10 @@
               <h3>Readiness</h3>
               <div class="diagnostics-head">
                 <span class="readiness-badge" id="diagnosticsStatus">Checking</span>
+                <button class="text-button" id="installRequirements" title="Install Python requirements" aria-label="Install Python requirements">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"></path></svg>
+                  <span>Install</span>
+                </button>
                 <button class="mini-button" id="refreshDiagnostics" title="Refresh readiness" aria-label="Refresh readiness">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.8-4.2L13 11h8V3z"></path></svg>
                 </button>
@@ -155,10 +159,12 @@
           <div class="tabs">
             <button class="tab active" data-view="logs">Live Logs</button>
             <button class="tab" data-view="validation">Validation</button>
+            <button class="tab" data-view="setup">Setup</button>
           </div>
 
           <pre id="logsView" class="terminal"></pre>
           <pre id="validationView" class="terminal hidden"></pre>
+          <pre id="setupView" class="terminal hidden"></pre>
         </section>
 
         <section class="panel editor-panel">
