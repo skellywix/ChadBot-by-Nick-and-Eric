@@ -76,14 +76,35 @@ function formatDuration(seconds) {
   return `${minutes}:${secs}`;
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function canRetryApi(options) {
+  return !options.method || options.method.toUpperCase() === "GET";
+}
+
+async function api(path, options = {}, attempt = 0) {
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (canRetryApi(options) && attempt < 2) {
+      await delay(180 * (attempt + 1));
+      return api(path, options, attempt + 1);
+    }
+    throw error;
+  }
+  if (canRetryApi(options) && response.status >= 500 && attempt < 2) {
+    await delay(180 * (attempt + 1));
+    return api(path, options, attempt + 1);
+  }
   const text = await response.text();
   let payload = {};
   try {

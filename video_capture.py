@@ -1,9 +1,10 @@
+import argparse
 import cv2 as cv
 import time
 from functions import WindowCapture, Vision
 
 
-def capture_runelite(search_image='search_img.png'):
+def capture_runelite(search_image):
     wincap = WindowCapture()
     vision_limestone = Vision(search_image)
 
@@ -30,5 +31,16 @@ def capture_runelite(search_image='search_img.png'):
 
     print('Done.')
 
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Run live template matching against the RuneLite window.")
+    parser.add_argument(
+        "template",
+        help="Template image to locate. Relative paths are resolved from the script folder, current folder, or repo root.",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    capture_runelite()
+    args = parse_args()
+    capture_runelite(args.template)

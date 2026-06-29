@@ -131,6 +131,37 @@ def test_analyze_script_ignores_regex_strings(monkeypatch, tmp_path):
     assert analysis["assetReferences"] == []
 
 
+def test_analyze_script_tracks_generated_image_saves_and_str_paths(monkeypatch, tmp_path):
+    root = tmp_path
+    script_dir = root / "scripts" / "demo"
+    asset_dir = script_dir / "templates"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "needle.png").write_bytes(b"image")
+    (script_dir / "demo.py").write_text(
+        "\n".join([
+            "from pathlib import Path",
+            "import cv2 as cv",
+            "import functions as f",
+            "SCRIPT_DIR = Path(__file__).resolve().parent",
+            "NEEDLE = SCRIPT_DIR / 'templates' / 'needle.png'",
+            "image = cv.imread(str(NEEDLE))",
+            "debug_image.save('debug.png')",
+            "def draw(haystack):",
+            "    return cv.imread(haystack)",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "REPO_ROOT", root)
+
+    analysis = server.analyze_script("scripts/demo/demo.py")
+
+    references = {(item["value"], item["usage"]): item for item in analysis["assetReferences"]}
+    assert analysis["status"] == "ok"
+    assert references["scripts/demo/templates/needle.png", "read"]["status"] == "ok"
+    assert references["debug.png", "write"]["status"] == "generated"
+    assert not any(warning["label"] == "Dynamic path" for warning in analysis["warnings"])
+
+
 def test_analyze_script_rejects_non_bot_files(monkeypatch, tmp_path):
     root = tmp_path
     (root / "tool.py").write_text("print('nope')\n", encoding="utf-8")
