@@ -533,7 +533,8 @@ button:disabled:hover {
   margin-top: 12px;
 }
 
-.diagnostics-panel {
+.diagnostics-panel,
+.script-health-panel {
   margin: 0 14px 14px;
   padding: 12px;
   border: 1px solid var(--line-soft);
@@ -580,7 +581,8 @@ button:disabled:hover {
   color: #ffd8d5;
 }
 
-.diagnostics-summary {
+.diagnostics-summary,
+.analysis-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
@@ -616,12 +618,14 @@ button:disabled:hover {
   white-space: nowrap;
 }
 
-.diagnostics-checks {
+.diagnostics-checks,
+.analysis-list {
   display: grid;
   gap: 6px;
 }
 
-.diagnostic-row {
+.diagnostic-row,
+.analysis-row {
   display: grid;
   grid-template-columns: 9px minmax(0, 1fr);
   align-items: start;
@@ -632,11 +636,13 @@ button:disabled:hover {
   background: #0c1211;
 }
 
-.diagnostic-row.warn {
+.diagnostic-row.warn,
+.analysis-row.warn {
   border-color: rgb(210 184 79 / 22%);
 }
 
-.diagnostic-row.error {
+.diagnostic-row.error,
+.analysis-row.error {
   border-color: rgb(255 103 95 / 24%);
 }
 
@@ -648,12 +654,40 @@ button:disabled:hover {
   background: var(--green);
 }
 
-.diagnostic-row.warn .diagnostic-dot {
+.diagnostic-row.warn .diagnostic-dot,
+.analysis-row.warn .diagnostic-dot {
   background: var(--amber);
 }
 
-.diagnostic-row.error .diagnostic-dot {
+.diagnostic-row.error .diagnostic-dot,
+.analysis-row.error .diagnostic-dot {
   background: var(--red);
+}
+
+.analysis-row small {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-row strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-more {
+  padding: 4px 2px 0 18px;
+  color: var(--muted-2);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .tabs {
@@ -803,7 +837,8 @@ button:disabled:hover {
   .portability-grid,
   .args-field,
   .settings-grid,
-  .diagnostics-summary {
+  .diagnostics-summary,
+  .analysis-summary {
     grid-template-columns: 1fr;
   }
 

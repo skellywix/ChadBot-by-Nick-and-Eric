@@ -102,6 +102,20 @@
             </div>
           </div>
 
+          <div class="script-health-panel" id="scriptAnalysisPanel">
+            <div class="section-head tight">
+              <h3>Script Health</h3>
+              <div class="diagnostics-head">
+                <span class="readiness-badge" id="scriptAnalysisStatus">Select</span>
+                <button class="mini-button" id="refreshScriptAnalysis" title="Refresh script health" aria-label="Refresh script health">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.8-4.2L13 11h8V3z"></path></svg>
+                </button>
+              </div>
+            </div>
+            <div class="analysis-summary" id="scriptAnalysisSummary"></div>
+            <div class="analysis-list" id="scriptAnalysisAssets"></div>
+          </div>
+
           <label class="args-field">
             <span>Script Args</span>
             <input id="scriptArgs" type="text" spellcheck="false" placeholder="Optional arguments">

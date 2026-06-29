@@ -7,6 +7,7 @@ run before the automation dependencies are installed.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
 import math
@@ -20,7 +21,7 @@ import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -57,6 +58,31 @@ DEFAULT_BASE_HEIGHT = 1080
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off", ""}
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png"}
+SCRIPT_ASSET_EXTENSIONS = IMAGE_EXTENSIONS | {".csv", ".json", ".txt"}
+READ_PATH_CALLS = {
+    "cv.imread",
+    "cv2.imread",
+    "f.find",
+    "f.find_all",
+    "f.find_option",
+    "f.find_spots",
+    "f.play_actions",
+    "functions.find",
+    "functions.find_all",
+    "functions.find_option",
+    "functions.find_spots",
+    "functions.play_actions",
+    "open",
+}
+WRITE_PATH_CALLS = {
+    "cv.imwrite",
+    "cv2.imwrite",
+    "pag.screenshot",
+    "pyautogui.screenshot",
+}
+FOLDER_PATH_CALLS = {
+    "os.listdir",
+}
 REQUIREMENTS_FILES = (REPO_ROOT / "requirements.txt", REPO_ROOT / "requirements-dev.txt")
 RUNTIME_DEPENDENCIES = (
     {"id": "pyautogui", "label": "PyAutoGUI", "module": "pyautogui", "required": True},
@@ -232,7 +258,8 @@ def status_from_checks(checks: list[dict]) -> str:
     return "ok"
 
 
-def count_repo_files(extensions: set[str], roots: tuple[Path, ...] = (REPO_ROOT,)) -> int:
+def count_repo_files(extensions: set[str], roots: tuple[Path, ...] | None = None) -> int:
+    roots = roots or (REPO_ROOT,)
     count = 0
     for root in roots:
         if not root.exists():
@@ -420,10 +447,16 @@ def validate_edit_path(relative_path: str, must_exist: bool = False) -> Path:
     return path
 
 
-def is_discoverable_script(path: Path) -> bool:
+def is_discoverable_script(path: Path, root: Path | None = None) -> bool:
+    root = (root or REPO_ROOT).resolve()
+    path = path.resolve()
     if path.suffix.lower() != ".py":
         return False
-    rel_parts = path.relative_to(REPO_ROOT).parts
+    if not is_relative_to(path, root):
+        return False
+    rel_parts = path.relative_to(root).parts
+    if not rel_parts:
+        return False
     if set(rel_parts) & EXCLUDED_DIRS:
         return False
     if rel_parts[0] == "scripts":
@@ -431,7 +464,8 @@ def is_discoverable_script(path: Path) -> bool:
     return path.name in CORE_SCRIPTS
 
 
-def discover_scripts(root: Path = REPO_ROOT) -> list[dict]:
+def discover_scripts(root: Path | None = None) -> list[dict]:
+    root = (root or REPO_ROOT).resolve()
     scripts: list[Path] = []
     for name in CORE_SCRIPTS:
         script = root / name
@@ -441,7 +475,7 @@ def discover_scripts(root: Path = REPO_ROOT) -> list[dict]:
 
     items = []
     for script in sorted({path.resolve() for path in scripts}):
-        if not is_relative_to(script, root) or not is_discoverable_script(script):
+        if not is_relative_to(script, root) or not is_discoverable_script(script, root=root):
             continue
         rel = script.relative_to(root).as_posix()
         rel_parts = Path(rel).parts
@@ -458,7 +492,8 @@ def discover_scripts(root: Path = REPO_ROOT) -> list[dict]:
     return items
 
 
-def discover_editable_files(root: Path = REPO_ROOT) -> list[dict]:
+def discover_editable_files(root: Path | None = None) -> list[dict]:
+    root = (root or REPO_ROOT).resolve()
     files = []
     for path in sorted(root.glob("**/*")):
         if not path.is_file():
@@ -494,6 +529,372 @@ def build_script_command(script_path: Path, args: list[str] | None = None) -> tu
     env["CHADBOT_SCRIPT_DIR"] = str(cwd)
     env["CHADBOT_SCRIPT_PATH"] = str(script_path)
     return [sys.executable, "-u", script_path.name, *run_args], cwd, env
+
+
+def ast_call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = ast_call_name(node.value)
+        return f"{base}.{node.attr}" if base else node.attr
+    if isinstance(node, ast.Call):
+        return ast_call_name(node.func)
+    return ""
+
+
+def normalize_call_name(name: str, aliases: dict[str, str]) -> str:
+    if not name:
+        return ""
+    parts = name.split(".")
+    if parts[0] in aliases:
+        replacement = aliases[parts[0]].split(".")
+        parts = [*replacement, *parts[1:]]
+    return ".".join(parts)
+
+
+def collect_import_metadata(tree: ast.AST) -> tuple[list[str], dict[str, str], bool]:
+    imports: set[str] = set()
+    aliases: dict[str, str] = {}
+    imports_functions = False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = alias.name.split(".")[0]
+                imports.add(module)
+                aliases[alias.asname or module] = alias.name
+                if module == "functions":
+                    imports_functions = True
+        elif isinstance(node, ast.ImportFrom):
+            module = (node.module or "").split(".")[0]
+            if module:
+                imports.add(module)
+            if module == "functions":
+                imports_functions = True
+                for alias in node.names:
+                    aliases[alias.asname or alias.name] = f"functions.{alias.name}"
+
+    return sorted(imports), aliases, imports_functions
+
+
+def is_absolute_reference(value: object) -> bool:
+    if isinstance(value, Path):
+        return value.is_absolute()
+    text = str(value)
+    return PureWindowsPath(text).is_absolute() or PurePosixPath(text).is_absolute()
+
+
+def path_value(value: Path | str, hardcoded_absolute: bool = False) -> dict:
+    return {
+        "value": value,
+        "hardcoded_absolute": hardcoded_absolute or (isinstance(value, str) and is_absolute_reference(value)),
+    }
+
+
+def path_value_text(value: dict) -> str:
+    raw = value["value"]
+    if isinstance(raw, Path):
+        try:
+            resolved = raw.resolve()
+            if is_relative_to(resolved, REPO_ROOT):
+                return repo_relative(resolved)
+        except OSError:
+            pass
+    return str(raw)
+
+
+def combine_path_values(left: dict, right: dict) -> dict:
+    left_value = left["value"]
+    right_value = right["value"]
+    combined = Path(left_value) / str(right_value) if not isinstance(left_value, Path) else left_value / str(right_value)
+    return path_value(combined, bool(left["hardcoded_absolute"] or right["hardcoded_absolute"]))
+
+
+def literal_int(node: ast.AST) -> int | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    return None
+
+
+def evaluate_path_expression(node: ast.AST, assignments: dict[str, dict], script_path: Path) -> dict | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return path_value(node.value, is_absolute_reference(node.value))
+    if isinstance(node, ast.Name):
+        if node.id == "__file__":
+            return path_value(script_path)
+        return assignments.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left = evaluate_path_expression(node.left, assignments, script_path)
+        right = evaluate_path_expression(node.right, assignments, script_path)
+        if left and right:
+            return combine_path_values(left, right)
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
+        base = evaluate_path_expression(node.value.value, assignments, script_path)
+        index = literal_int(node.slice)
+        if base and index is not None:
+            try:
+                return path_value(Path(base["value"]).parents[index], bool(base["hardcoded_absolute"]))
+            except IndexError:
+                return None
+    if isinstance(node, ast.Attribute):
+        base = evaluate_path_expression(node.value, assignments, script_path)
+        if base and node.attr == "parent":
+            return path_value(Path(base["value"]).parent, bool(base["hardcoded_absolute"]))
+    if isinstance(node, ast.Call):
+        call_name = ast_call_name(node.func)
+        if call_name in {"Path", "pathlib.Path"} and node.args:
+            return evaluate_path_expression(node.args[0], assignments, script_path)
+        if call_name == "os.path.dirname" and node.args:
+            source = evaluate_path_expression(node.args[0], assignments, script_path)
+            if source:
+                return path_value(Path(source["value"]).parent, bool(source["hardcoded_absolute"]))
+        if call_name == "os.path.join":
+            resolved_parts = [evaluate_path_expression(arg, assignments, script_path) for arg in node.args]
+            current = None
+            for part in resolved_parts:
+                if not part:
+                    break
+                current = part if current is None else combine_path_values(current, part)
+            return current
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "resolve":
+            base = evaluate_path_expression(node.func.value, assignments, script_path)
+            if base:
+                return path_value(Path(base["value"]).resolve(), bool(base["hardcoded_absolute"]))
+    return None
+
+
+def collect_path_assignments(tree: ast.AST, script_path: Path) -> dict[str, dict]:
+    assignments: dict[str, dict] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            value = evaluate_path_expression(node.value, assignments, script_path)
+            if not value:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assignments[target.id] = value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            value = evaluate_path_expression(node.value, assignments, script_path) if node.value else None
+            if value:
+                assignments[node.target.id] = value
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            positional_args = node.args.posonlyargs + node.args.args
+            defaults = node.args.defaults
+            default_offset = len(positional_args) - len(defaults)
+            for index, default in enumerate(defaults):
+                target = positional_args[default_offset + index]
+                value = evaluate_path_expression(default, assignments, script_path)
+                if value:
+                    assignments[target.arg] = value
+    return assignments
+
+
+def path_values_from_node(node: ast.AST, assignments: dict[str, dict], script_path: Path) -> list[dict]:
+    direct = evaluate_path_expression(node, assignments, script_path)
+    if direct:
+        return [direct]
+    if isinstance(node, ast.Call) and ast_call_name(node.func) == "os.path.join":
+        values = []
+        for arg in node.args:
+            part = evaluate_path_expression(arg, assignments, script_path)
+            if part:
+                values.append(part)
+        return values
+    return []
+
+
+def has_asset_extension(value: object) -> bool:
+    return Path(str(value)).suffix.lower() in SCRIPT_ASSET_EXTENSIONS
+
+
+def looks_like_path_reference(value: dict, force: bool = False) -> bool:
+    raw = value["value"]
+    if isinstance(raw, Path):
+        return True
+    text = str(raw)
+    return force or has_asset_extension(text) or "/" in text or "\\" in text
+
+
+def candidate_reference_paths(value: dict, script_path: Path) -> list[Path]:
+    raw = value["value"]
+    if isinstance(raw, Path):
+        path = raw
+    else:
+        path = Path(str(raw))
+
+    if is_absolute_reference(raw):
+        return [path]
+    candidates = [script_path.parent / path, REPO_ROOT / path]
+    if path.name == str(path) and path.suffix.lower() in SCRIPT_ASSET_EXTENSIONS and script_path.parent.exists():
+        for child in sorted(script_path.parent.iterdir()):
+            if child.is_dir() and child.name not in EXCLUDED_DIRS:
+                candidates.append(child / path)
+    return candidates
+
+
+def resolved_reference_label(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        resolved = path.resolve()
+        return repo_relative(resolved) if is_relative_to(resolved, REPO_ROOT) else str(resolved)
+    except OSError:
+        return str(path)
+
+
+def make_asset_reference(value: dict, script_path: Path, usage: str, line: int) -> dict:
+    candidates = candidate_reference_paths(value, script_path)
+    existing = next((candidate for candidate in candidates if candidate.exists()), None)
+    selected = existing or (candidates[0] if candidates else None)
+    if existing:
+        status = "ok"
+    elif usage == "write":
+        status = "generated"
+    else:
+        status = "missing"
+    return {
+        "value": path_value_text(value),
+        "line": line,
+        "usage": usage,
+        "status": status,
+        "absolute": bool(value["hardcoded_absolute"]),
+        "resolved": resolved_reference_label(selected),
+    }
+
+
+def script_metadata(script_path: Path) -> dict:
+    rel = repo_relative(script_path)
+    rel_parts = Path(rel).parts
+    group = "Core" if rel_parts[0] != "scripts" else rel_parts[1].replace("_", " ").title()
+    return {
+        "id": rel,
+        "name": script_path.stem.replace("_", " ").title(),
+        "path": rel,
+        "group": group,
+    }
+
+
+def analyze_script(relative_script: str) -> dict:
+    script_path = resolve_repo_path(relative_script)
+    if not script_path.exists():
+        raise FileNotFoundError(f"File not found: {relative_script}")
+    if not is_discoverable_script(script_path):
+        raise ValueError("Only discovered Python bot scripts can be analyzed.")
+
+    source = script_path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source, filename=repo_relative(script_path))
+    except SyntaxError as exc:
+        return {
+            "script": script_metadata(script_path),
+            "status": "error",
+            "imports": [],
+            "importsFunctions": False,
+            "assetReferences": [],
+            "warnings": [{
+                "status": "error",
+                "label": "Syntax error",
+                "detail": exc.msg,
+                "line": exc.lineno or 0,
+            }],
+            "summary": {"assets": 0, "missing": 0, "warnings": 1},
+        }
+
+    imports, aliases, imports_functions = collect_import_metadata(tree)
+    assignments = collect_path_assignments(tree, script_path)
+    references: list[dict] = []
+    warnings: list[dict] = []
+    seen_references: set[tuple[str, int, str]] = set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        raw_name = ast_call_name(node.func)
+        name = normalize_call_name(raw_name, aliases)
+        if name in WRITE_PATH_CALLS:
+            usage = "write"
+        elif name in FOLDER_PATH_CALLS:
+            usage = "folder"
+        elif name in READ_PATH_CALLS:
+            usage = "read"
+        else:
+            usage = "reference"
+
+        path_args: list[tuple[ast.AST, str]] = []
+        if usage != "reference":
+            max_args = 2 if name.endswith("play_actions") else 1
+            path_args.extend((arg, usage) for arg in node.args[:max_args])
+            for keyword in node.keywords:
+                if keyword.arg not in {"filename", "img_name", "new_path", "path"}:
+                    continue
+                keyword_usage = "write" if keyword.arg == "img_name" else "folder" if keyword.arg == "new_path" else usage
+                path_args.append((keyword.value, keyword_usage))
+        else:
+            path_args.extend((arg, usage) for arg in node.args)
+
+        resolved_any = False
+        for arg, arg_usage in path_args:
+            for value in path_values_from_node(arg, assignments, script_path):
+                force = arg_usage != "reference"
+                if not looks_like_path_reference(value, force=force):
+                    continue
+                resolved_any = True
+                reference = make_asset_reference(value, script_path, arg_usage, getattr(arg, "lineno", getattr(node, "lineno", 0)))
+                key = (reference["value"], reference["line"], reference["usage"])
+                if key in seen_references:
+                    continue
+                seen_references.add(key)
+                references.append(reference)
+
+        if usage in {"read", "folder"} and path_args and not resolved_any:
+            warnings.append({
+                "status": "warn",
+                "label": "Dynamic path",
+                "detail": f"{name} uses a path that could not be statically resolved.",
+                "line": getattr(node, "lineno", 0),
+            })
+
+    for reference in references:
+        if reference["status"] == "missing":
+            warnings.append({
+                "status": "error",
+                "label": "Missing asset",
+                "detail": f"{reference['value']} was not found from the script folder or repo root.",
+                "line": reference["line"],
+            })
+        if reference["absolute"]:
+            warnings.append({
+                "status": "warn",
+                "label": "Hardcoded path",
+                "detail": f"{reference['value']} is absolute and may fail on another computer.",
+                "line": reference["line"],
+            })
+
+    if ("pyautogui" in imports or "cv2" in imports) and not imports_functions and script_path.name not in CORE_SCRIPTS:
+        warnings.append({
+            "status": "warn",
+            "label": "Portability helpers",
+            "detail": "Import functions.py helpers so scaling and script-relative assets stay consistent.",
+            "line": 1,
+        })
+
+    references.sort(key=lambda item: (item["status"] != "missing", item["value"], item["line"]))
+    warnings.sort(key=lambda item: (item["status"] != "error", item["line"], item["label"]))
+    missing_count = sum(1 for reference in references if reference["status"] == "missing")
+    checks = warnings or [{"status": "ok"}]
+    return {
+        "script": script_metadata(script_path),
+        "status": status_from_checks(checks),
+        "imports": imports,
+        "importsFunctions": imports_functions,
+        "assetReferences": references,
+        "warnings": warnings,
+        "summary": {
+            "assets": len(references),
+            "missing": missing_count,
+            "warnings": len(warnings),
+        },
+    }
 
 
 class ProcessManager:
@@ -778,6 +1179,9 @@ class ChadBotHandler(BaseHTTPRequestHandler):
             for script in scripts:
                 script["running"] = status["running"] and status["script"] == script["path"]
             self._json({"scripts": scripts, "status": status})
+        elif path == "/api/scripts/analyze":
+            relative_path = self._first_query_value(query, "path")
+            self._json({"analysis": analyze_script(relative_path)})
         elif path == "/api/files/tree":
             self._json({"files": discover_editable_files()})
         elif path == "/api/settings":
