@@ -26,6 +26,7 @@ The UI provides:
 - Start and stop controls for bot scripts.
 - Runtime controls for coordinate baseline, scaling, template scales, and script arguments.
 - A readiness panel for Python packages, screen access, scripts, assets, and runtime storage.
+- A controlled setup action for installing the repo's Python requirements, with setup logs in the UI.
 - Live stdout/stderr logs from the running bot process.
 - A file tree and editor for safe in-repo changes to `.py`, `.json`, `.txt`, `.md`, `.toml`, `.yaml`, `.yml`, `.html`, `.css`, and `.js` files.
 - Save and revert controls for fast bot iteration.
@@ -38,6 +39,7 @@ Safety boundaries:
 - Script execution is limited to discovered Python bot scripts in the repository.
 - File editing is constrained to allowed text/code extensions inside the repository.
 - Validation commands are allowlisted.
+- Setup execution is limited to `python -m pip install -r requirements.txt -r requirements-dev.txt`.
 - Diagnostics check dependency availability without importing GUI-heavy modules first.
 - No arbitrary shell command endpoint is exposed.
 

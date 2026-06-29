@@ -163,6 +163,75 @@ def test_runtime_diagnostics_reports_screen_scale(monkeypatch, tmp_path):
     assert diagnostics["assets"]["scripts"] == len(server.discover_scripts())
 
 
+def test_setup_requirements_command_is_allowlisted(monkeypatch, tmp_path):
+    requirements = tmp_path / "requirements.txt"
+    dev_requirements = tmp_path / "requirements-dev.txt"
+    requirements.write_text("PyAutoGUI\n", encoding="utf-8")
+    dev_requirements.write_text("pytest\n", encoding="utf-8")
+    monkeypatch.setattr(server, "REQUIREMENTS_FILES", (requirements, dev_requirements))
+
+    command = server.setup_requirements_command()
+
+    assert command[:5] == [server.sys.executable, "-m", "pip", "install", "--disable-pip-version-check"]
+    assert command.count("-r") == 2
+    assert str(requirements) in command
+    assert str(dev_requirements) in command
+
+
+def test_setup_requirements_command_rejects_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "REQUIREMENTS_FILES", (tmp_path / "missing.txt",))
+
+    with pytest.raises(FileNotFoundError, match="Missing requirements file"):
+        server.setup_requirements_command()
+
+
+def test_setup_manager_install_requirements_runs_fixed_command(monkeypatch, tmp_path):
+    requirements = tmp_path / "requirements.txt"
+    dev_requirements = tmp_path / "requirements-dev.txt"
+    requirements.write_text("PyAutoGUI\n", encoding="utf-8")
+    dev_requirements.write_text("pytest\n", encoding="utf-8")
+    monkeypatch.setattr(server, "REQUIREMENTS_FILES", (requirements, dev_requirements))
+    captured = {}
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = ["installed\n"]
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    class ImmediateThread:
+        def __init__(self, target, daemon):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(server.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(server.threading, "Thread", ImmediateThread)
+
+    manager = server.SetupManager()
+    status = manager.install_requirements()
+
+    assert captured["command"] == server.setup_requirements_command()
+    assert captured["kwargs"]["cwd"] == server.REPO_ROOT
+    assert "shell" not in captured["kwargs"]
+    assert status["running"] is False
+    assert status["returnCode"] == 0
+    assert any("installed" in entry["text"] for entry in manager.logs()["logs"])
+
+
 def test_validate_edit_path_allows_new_safe_subfolder_file():
     path = server.validate_edit_path("scripts/new_bot/new_bot.py")
 

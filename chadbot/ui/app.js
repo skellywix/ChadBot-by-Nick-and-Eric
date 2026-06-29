@@ -12,6 +12,9 @@ const state = {
   settingsDirty: false,
   logCursor: 0,
   logLines: [],
+  setupCursor: 0,
+  setupLines: [],
+  setupRunning: false,
   running: false,
 };
 
@@ -42,8 +45,10 @@ const el = {
   diagnosticsSummary: document.querySelector("#diagnosticsSummary"),
   diagnosticsChecks: document.querySelector("#diagnosticsChecks"),
   refreshDiagnostics: document.querySelector("#refreshDiagnostics"),
+  installRequirements: document.querySelector("#installRequirements"),
   logsView: document.querySelector("#logsView"),
   validationView: document.querySelector("#validationView"),
+  setupView: document.querySelector("#setupView"),
   fileSearch: document.querySelector("#fileSearch"),
   fileList: document.querySelector("#fileList"),
   refreshFiles: document.querySelector("#refreshFiles"),
@@ -240,6 +245,11 @@ function renderDiagnostics() {
   `).join("");
 }
 
+function renderSetupStatus(status = {}) {
+  state.setupRunning = Boolean(status.running);
+  el.installRequirements.disabled = state.setupRunning;
+}
+
 function renderDirtyState() {
   const dirty = state.fileContent !== state.savedContent;
   el.dirtyState.textContent = dirty ? "Unsaved changes" : "Saved";
@@ -298,6 +308,16 @@ async function refreshStatus() {
   renderRunState(status);
 }
 
+async function refreshSetupStatus() {
+  const wasRunning = state.setupRunning;
+  const status = await api("/api/setup/status");
+  renderSetupStatus(status);
+  if (wasRunning && !status.running) {
+    await refreshDiagnostics();
+    showToast(status.returnCode === 0 ? "Setup completed." : "Setup failed.");
+  }
+}
+
 async function pollLogs() {
   const payload = await api(`/api/process/logs?after=${state.logCursor}`);
   state.logCursor = payload.latest;
@@ -310,6 +330,21 @@ async function pollLogs() {
   if (payload.logs.length) {
     el.logsView.textContent = `${state.logLines.join("\n")}\n`;
     el.logsView.scrollTop = el.logsView.scrollHeight;
+  }
+}
+
+async function pollSetupLogs() {
+  const payload = await api(`/api/setup/logs?after=${state.setupCursor}`);
+  state.setupCursor = payload.latest;
+  for (const entry of payload.logs) {
+    state.setupLines.push(`[${new Date(entry.time * 1000).toLocaleTimeString()}] ${entry.text}`);
+  }
+  if (state.setupLines.length > 1200) {
+    state.setupLines = state.setupLines.slice(-1200);
+  }
+  if (payload.logs.length) {
+    el.setupView.textContent = `${state.setupLines.join("\n")}\n`;
+    el.setupView.scrollTop = el.setupView.scrollHeight;
   }
 }
 
@@ -396,6 +431,20 @@ async function runValidation(check) {
   showToast(payload.returnCode === 0 ? `${check} passed.` : `${check} failed.`);
 }
 
+async function installRequirements() {
+  activateTab("setup");
+  state.setupCursor = 0;
+  state.setupLines = [];
+  el.setupView.textContent = "Starting setup...\n";
+  const status = await api("/api/setup/install", {
+    method: "POST",
+    body: "{}",
+  });
+  renderSetupStatus(status);
+  await pollSetupLogs();
+  showToast("Installing requirements.");
+}
+
 function readSettingsForm() {
   const baseWidth = Number(el.baseWidthInput.value);
   const baseHeight = Number(el.baseHeightInput.value);
@@ -478,6 +527,7 @@ function activateTab(view) {
   }
   el.logsView.classList.toggle("hidden", view !== "logs");
   el.validationView.classList.toggle("hidden", view !== "validation");
+  el.setupView.classList.toggle("hidden", view !== "setup");
 }
 
 function parseCommandArgs(value) {
@@ -551,6 +601,7 @@ function bindEvents() {
   el.saveSettings.addEventListener("click", () => saveSettings().catch((error) => showToast(error.message)));
   el.resetSettings.addEventListener("click", () => resetSettings().catch((error) => showToast(error.message)));
   el.refreshDiagnostics.addEventListener("click", () => refreshDiagnostics().catch((error) => showToast(error.message)));
+  el.installRequirements.addEventListener("click", () => installRequirements().catch((error) => showToast(error.message)));
   document.querySelector("#refreshScripts").addEventListener("click", () => refreshScripts().catch((error) => showToast(error.message)));
   document.querySelector("#refreshFiles").addEventListener("click", () => refreshFiles().catch((error) => showToast(error.message)));
   el.scriptSearch.addEventListener("input", renderScripts);
@@ -575,9 +626,11 @@ function bindEvents() {
 async function init() {
   bindEvents();
   await refreshHealth();
-  await Promise.all([refreshSettings(), refreshDiagnostics(), refreshScripts(), refreshFiles()]);
+  await Promise.all([refreshSettings(), refreshDiagnostics(), refreshSetupStatus(), refreshScripts(), refreshFiles()]);
   setInterval(() => refreshStatus().catch(() => {}), 1000);
   setInterval(() => pollLogs().catch(() => {}), 900);
+  setInterval(() => refreshSetupStatus().catch(() => {}), 1400);
+  setInterval(() => pollSetupLogs().catch(() => {}), 1000);
   if (state.files.length) {
     const readme = state.files.find((file) => file.path === "README.md") || state.files[0];
     await loadFile(readme.path);
