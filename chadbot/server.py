@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import mimetypes
 import os
 import subprocess
@@ -23,6 +24,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UI_ROOT = Path(__file__).resolve().parent / "ui"
 RUNTIME_ROOT = Path(__file__).resolve().parent / "runtime"
+SETTINGS_PATH = RUNTIME_ROOT / "settings.json"
 
 EDITABLE_EXTENSIONS = {
     ".json",
@@ -47,6 +49,10 @@ EXCLUDED_DIRS = {
 }
 CORE_SCRIPTS = ("Recorder.py", "video_capture.py", "world_hopper.py")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+DEFAULT_BASE_WIDTH = 1920
+DEFAULT_BASE_HEIGHT = 1080
+TRUE_VALUES = {"1", "true", "yes", "on"}
+FALSE_VALUES = {"0", "false", "no", "off", ""}
 
 
 def env_positive_int(name: str, default: int) -> int:
@@ -57,15 +63,131 @@ def env_positive_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
-def portability_config() -> dict:
+def environment_default_settings() -> dict:
     template_scales = os.environ.get("CHADBOT_TEMPLATE_SCALES", "").strip()
     return {
-        "baseWidth": env_positive_int("CHADBOT_BASE_WIDTH", 1920),
-        "baseHeight": env_positive_int("CHADBOT_BASE_HEIGHT", 1080),
-        "scalingDisabled": os.environ.get("CHADBOT_DISABLE_SCALING", "").lower() in {"1", "true", "yes", "on"},
-        "templateScales": template_scales or "auto",
+        "baseWidth": env_positive_int("CHADBOT_BASE_WIDTH", DEFAULT_BASE_WIDTH),
+        "baseHeight": env_positive_int("CHADBOT_BASE_HEIGHT", DEFAULT_BASE_HEIGHT),
+        "disableScaling": normalize_bool(os.environ.get("CHADBOT_DISABLE_SCALING", ""), default=False),
+        "templateScales": template_scales,
+    }
+
+
+def normalize_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in TRUE_VALUES:
+            return True
+        if lowered in FALSE_VALUES:
+            return False
+    raise ValueError("Disable scaling must be true or false.")
+
+
+def _format_scale(value: float) -> str:
+    return f"{value:g}"
+
+
+def normalize_template_scales(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    normalized = []
+    for item in text.split(","):
+        item = item.strip().lower()
+        if not item:
+            continue
+        try:
+            if "x" in item:
+                sx_raw, sy_raw = item.split("x", 1)
+                sx = float(sx_raw)
+                sy = float(sy_raw)
+                if not math.isfinite(sx) or not math.isfinite(sy) or sx <= 0 or sy <= 0:
+                    raise ValueError
+                normalized.append(f"{_format_scale(sx)}x{_format_scale(sy)}")
+            else:
+                scale = float(item)
+                if not math.isfinite(scale) or scale <= 0:
+                    raise ValueError
+                normalized.append(_format_scale(scale))
+        except ValueError:
+            raise ValueError("Template scales must be positive numbers like 1,0.75,1.25 or 0.75x0.8.")
+    return ",".join(normalized)
+
+
+def normalize_settings(payload: dict | None = None, defaults: dict | None = None) -> dict:
+    if payload is not None and not isinstance(payload, dict):
+        raise ValueError("Settings payload must be a JSON object.")
+    source = {**(defaults or environment_default_settings()), **(payload or {})}
+    try:
+        base_width = int(source.get("baseWidth", DEFAULT_BASE_WIDTH))
+        base_height = int(source.get("baseHeight", DEFAULT_BASE_HEIGHT))
+    except (TypeError, ValueError):
+        raise ValueError("Base width and height must be positive integers.")
+    if base_width <= 0 or base_height <= 0:
+        raise ValueError("Base width and height must be positive integers.")
+
+    template_scales = normalize_template_scales(source.get("templateScales", ""))
+    disable_scaling = normalize_bool(source.get("disableScaling", False))
+    return {
+        "baseWidth": base_width,
+        "baseHeight": base_height,
+        "disableScaling": disable_scaling,
+        "templateScales": template_scales,
+    }
+
+
+def load_runtime_settings() -> dict:
+    defaults = environment_default_settings()
+    if not SETTINGS_PATH.exists():
+        return normalize_settings(defaults)
+    try:
+        payload = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Settings file is invalid JSON: {SETTINGS_PATH}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Settings file must contain a JSON object.")
+    return normalize_settings(payload, defaults=defaults)
+
+
+def save_runtime_settings(payload: dict) -> dict:
+    settings = normalize_settings(payload, defaults=environment_default_settings())
+    RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    return settings
+
+
+def reset_runtime_settings() -> dict:
+    if SETTINGS_PATH.exists():
+        SETTINGS_PATH.unlink()
+    return normalize_settings(environment_default_settings())
+
+
+def apply_runtime_environment(env: dict, settings: dict) -> None:
+    env["CHADBOT_BASE_WIDTH"] = str(settings["baseWidth"])
+    env["CHADBOT_BASE_HEIGHT"] = str(settings["baseHeight"])
+    env["CHADBOT_DISABLE_SCALING"] = "1" if settings["disableScaling"] else "0"
+    template_scales = settings["templateScales"].strip()
+    if template_scales:
+        env["CHADBOT_TEMPLATE_SCALES"] = template_scales
+    else:
+        env.pop("CHADBOT_TEMPLATE_SCALES", None)
+
+
+def portability_config(settings: dict | None = None) -> dict:
+    settings = settings or load_runtime_settings()
+    return {
+        "baseWidth": settings["baseWidth"],
+        "baseHeight": settings["baseHeight"],
+        "scalingDisabled": settings["disableScaling"],
+        "templateScales": settings["templateScales"] or "auto",
         "assetLookup": ["base_dir", "CHADBOT_SCRIPT_DIR", "caller", "cwd", "repo"],
         "repoRoot": str(REPO_ROOT),
+        "settingsPath": str(SETTINGS_PATH),
     }
 
 
@@ -178,6 +300,7 @@ def build_script_command(script_path: Path, args: list[str] | None = None) -> tu
     current_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(REPO_ROOT) if not current_pythonpath else f"{REPO_ROOT}{os.pathsep}{current_pythonpath}"
     env["PYTHONUNBUFFERED"] = "1"
+    apply_runtime_environment(env, load_runtime_settings())
     env["CHADBOT_REPO_ROOT"] = str(REPO_ROOT)
     env["CHADBOT_SCRIPT_DIR"] = str(cwd)
     env["CHADBOT_SCRIPT_PATH"] = str(script_path)
@@ -355,6 +478,9 @@ class ChadBotHandler(BaseHTTPRequestHandler):
             self._json({"scripts": scripts, "status": status})
         elif path == "/api/files/tree":
             self._json({"files": discover_editable_files()})
+        elif path == "/api/settings":
+            settings = load_runtime_settings()
+            self._json({"settings": settings, "portability": portability_config(settings)})
         elif path == "/api/files/read":
             relative_path = self._first_query_value(query, "path")
             file_path = validate_edit_path(relative_path, must_exist=True)
@@ -381,6 +507,11 @@ class ChadBotHandler(BaseHTTPRequestHandler):
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding="utf-8")
             self._json({"path": repo_relative(file_path), "saved": True, "modified": file_path.stat().st_mtime})
+        elif path == "/api/settings":
+            action = payload.get("action")
+            settings_payload = payload["settings"] if "settings" in payload else payload
+            settings = reset_runtime_settings() if action == "reset" else save_runtime_settings(settings_payload)
+            self._json({"settings": settings, "portability": portability_config(settings)})
         elif path == "/api/checks/run":
             self._json(run_check(payload.get("check", "")))
         else:
@@ -407,7 +538,10 @@ class ChadBotHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         if length == 0:
             return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return payload
 
     def _json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2).encode("utf-8")

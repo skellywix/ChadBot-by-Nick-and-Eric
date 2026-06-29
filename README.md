@@ -24,6 +24,7 @@ The UI provides:
 
 - Script discovery across the core scripts and `scripts/` activity folders.
 - Start and stop controls for bot scripts.
+- Runtime controls for coordinate baseline, scaling, template scales, and script arguments.
 - Live stdout/stderr logs from the running bot process.
 - A file tree and editor for safe in-repo changes to `.py`, `.json`, `.txt`, `.md`, `.toml`, `.yaml`, `.yml`, `.html`, `.css`, and `.js` files.
 - Save and revert controls for fast bot iteration.
@@ -75,6 +76,8 @@ Override it only when a script was authored against a different baseline:
 $env:CHADBOT_BASE_WIDTH = "2560"
 $env:CHADBOT_BASE_HEIGHT = "1440"
 ```
+
+The same baseline, scaling, and template settings can be changed from the ChadBot UI. UI changes are saved locally under `chadbot/runtime/settings.json`; that runtime folder is intentionally ignored by Git so each computer can keep its own settings.
 
 Disable scaling for troubleshooting:
 
