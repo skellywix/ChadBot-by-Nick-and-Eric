@@ -9,6 +9,7 @@ const state = {
   settings: null,
   portability: null,
   diagnostics: null,
+  scriptAnalysis: null,
   settingsDirty: false,
   logCursor: 0,
   logLines: [],
@@ -46,6 +47,11 @@ const el = {
   diagnosticsChecks: document.querySelector("#diagnosticsChecks"),
   refreshDiagnostics: document.querySelector("#refreshDiagnostics"),
   installRequirements: document.querySelector("#installRequirements"),
+  scriptAnalysisPanel: document.querySelector("#scriptAnalysisPanel"),
+  scriptAnalysisStatus: document.querySelector("#scriptAnalysisStatus"),
+  scriptAnalysisSummary: document.querySelector("#scriptAnalysisSummary"),
+  scriptAnalysisAssets: document.querySelector("#scriptAnalysisAssets"),
+  refreshScriptAnalysis: document.querySelector("#refreshScriptAnalysis"),
   logsView: document.querySelector("#logsView"),
   validationView: document.querySelector("#validationView"),
   setupView: document.querySelector("#setupView"),
@@ -135,8 +141,11 @@ function renderScripts() {
       `;
       row.addEventListener("click", () => {
         state.selectedScript = script;
+        state.scriptAnalysis = null;
         renderScripts();
         renderRunState();
+        renderScriptAnalysis();
+        refreshScriptAnalysis().catch((error) => showToast(error.message));
       });
       el.scriptList.append(row);
     }
@@ -245,6 +254,78 @@ function renderDiagnostics() {
   `).join("");
 }
 
+function usageLabel(usage) {
+  if (usage === "folder") return "folder";
+  if (usage === "write") return "generated";
+  if (usage === "read") return "required";
+  return "reference";
+}
+
+function renderScriptAnalysis() {
+  const selected = state.selectedScript;
+  const analysis = state.scriptAnalysis;
+  el.refreshScriptAnalysis.disabled = !selected;
+
+  if (!selected) {
+    el.scriptAnalysisPanel.dataset.status = "idle";
+    el.scriptAnalysisStatus.className = "readiness-badge warn";
+    el.scriptAnalysisStatus.textContent = "Select";
+    el.scriptAnalysisSummary.innerHTML = "";
+    el.scriptAnalysisAssets.innerHTML = '<div class="empty-state">No script selected.</div>';
+    return;
+  }
+
+  if (!analysis || analysis.script.path !== selected.path) {
+    el.scriptAnalysisPanel.dataset.status = "loading";
+    el.scriptAnalysisStatus.className = "readiness-badge warn";
+    el.scriptAnalysisStatus.textContent = "Checking";
+    el.scriptAnalysisSummary.innerHTML = "";
+    el.scriptAnalysisAssets.innerHTML = '<div class="empty-state">Checking selected script.</div>';
+    return;
+  }
+
+  const summary = [
+    ["Assets", String(analysis.summary.assets)],
+    ["Missing", String(analysis.summary.missing)],
+    ["Warnings", String(analysis.summary.warnings)],
+    ["Helpers", analysis.importsFunctions ? "Enabled" : "Missing"],
+  ];
+  el.scriptAnalysisPanel.dataset.status = analysis.status;
+  el.scriptAnalysisStatus.className = `readiness-badge ${analysis.status}`;
+  el.scriptAnalysisStatus.textContent = statusLabel(analysis.status);
+  el.scriptAnalysisSummary.innerHTML = summary.map(([label, value]) => `
+    <div class="diagnostic-pill">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `).join("");
+
+  const warnings = analysis.warnings.slice(0, 4).map((warning) => `
+    <div class="analysis-row ${escapeHtml(warning.status)}">
+      <span class="diagnostic-dot"></span>
+      <span>
+        <strong>${escapeHtml(warning.label)}</strong>
+        <small>${escapeHtml(warning.detail)}${warning.line ? ` - line ${escapeHtml(warning.line)}` : ""}</small>
+      </span>
+    </div>
+  `).join("");
+  const assets = analysis.assetReferences.slice(0, 8).map((asset) => `
+    <div class="analysis-row ${escapeHtml(asset.status === "missing" ? "error" : asset.status === "generated" ? "warn" : "ok")}">
+      <span class="diagnostic-dot"></span>
+      <span>
+        <strong>${escapeHtml(asset.value)}</strong>
+        <small>${escapeHtml(usageLabel(asset.usage))} - ${escapeHtml(asset.status)}${asset.line ? ` - line ${escapeHtml(asset.line)}` : ""}</small>
+      </span>
+    </div>
+  `).join("");
+  const overflow = analysis.assetReferences.length > 8
+    ? `<div class="analysis-more">${analysis.assetReferences.length - 8} more references</div>`
+    : "";
+  el.scriptAnalysisAssets.innerHTML = warnings || assets
+    ? `${warnings}${assets}${overflow}`
+    : '<div class="empty-state">No local assets referenced.</div>';
+}
+
 function renderSetupStatus(status = {}) {
   state.setupRunning = Boolean(status.running);
   el.installRequirements.disabled = state.setupRunning;
@@ -285,6 +366,21 @@ async function refreshDiagnostics() {
   renderDiagnostics();
 }
 
+async function refreshScriptAnalysis() {
+  if (!state.selectedScript) {
+    state.scriptAnalysis = null;
+    renderScriptAnalysis();
+    return;
+  }
+  const selectedPath = state.selectedScript.path;
+  const payload = await api(`/api/scripts/analyze?path=${encodeURIComponent(selectedPath)}`);
+  if (state.selectedScript?.path !== selectedPath) {
+    return;
+  }
+  state.scriptAnalysis = payload.analysis;
+  renderScriptAnalysis();
+}
+
 async function refreshScripts() {
   const payload = await api("/api/scripts");
   state.scripts = payload.scripts;
@@ -295,6 +391,7 @@ async function refreshScripts() {
   }
   renderScripts();
   renderRunState(payload.status);
+  await refreshScriptAnalysis();
 }
 
 async function refreshFiles() {
@@ -602,6 +699,7 @@ function bindEvents() {
   el.resetSettings.addEventListener("click", () => resetSettings().catch((error) => showToast(error.message)));
   el.refreshDiagnostics.addEventListener("click", () => refreshDiagnostics().catch((error) => showToast(error.message)));
   el.installRequirements.addEventListener("click", () => installRequirements().catch((error) => showToast(error.message)));
+  el.refreshScriptAnalysis.addEventListener("click", () => refreshScriptAnalysis().catch((error) => showToast(error.message)));
   document.querySelector("#refreshScripts").addEventListener("click", () => refreshScripts().catch((error) => showToast(error.message)));
   document.querySelector("#refreshFiles").addEventListener("click", () => refreshFiles().catch((error) => showToast(error.message)));
   el.scriptSearch.addEventListener("input", renderScripts);

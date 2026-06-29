@@ -57,6 +57,73 @@ def test_build_script_command_applies_runtime_settings(monkeypatch, tmp_path):
     assert env["CHADBOT_TEMPLATE_SCALES"] == "1,0.75"
 
 
+def test_analyze_script_reports_missing_assets_without_running_script(monkeypatch, tmp_path):
+    root = tmp_path
+    script_dir = root / "scripts" / "demo"
+    script_dir.mkdir(parents=True)
+    (script_dir / "templates").mkdir()
+    (script_dir / "template.png").write_bytes(b"image")
+    (script_dir / "templates" / "nested.png").write_bytes(b"image")
+    (script_dir / "actions.json").write_text("[]", encoding="utf-8")
+    (script_dir / "demo.py").write_text(
+        "\n".join([
+            "from pathlib import Path",
+            "import os",
+            "import pyautogui as pag",
+            "import functions as f",
+            "SCRIPT_DIR = Path(__file__).resolve().parent",
+            "def load_templates(folder='templates'):",
+            "    return os.listdir(folder)",
+            "f.find('template.png')",
+            "f.find('nested.png')",
+            "f.find('missing.png')",
+            "f.play_actions('actions.json', SCRIPT_DIR)",
+            "pag.screenshot('capture.png')",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "REPO_ROOT", root)
+
+    analysis = server.analyze_script("scripts/demo/demo.py")
+
+    references = {(item["value"], item["usage"]): item for item in analysis["assetReferences"]}
+    assert analysis["status"] == "error"
+    assert analysis["importsFunctions"] is True
+    assert references[("template.png", "read")]["status"] == "ok"
+    assert references[("nested.png", "read")]["status"] == "ok"
+    assert references[("templates", "folder")]["status"] == "ok"
+    assert references[("missing.png", "read")]["status"] == "missing"
+    assert references[("capture.png", "write")]["status"] == "generated"
+    assert analysis["summary"]["missing"] == 1
+    assert any(warning["label"] == "Missing asset" for warning in analysis["warnings"])
+
+
+def test_analyze_script_warns_about_hardcoded_absolute_paths(monkeypatch, tmp_path):
+    root = tmp_path
+    script_dir = root / "scripts" / "demo"
+    script_dir.mkdir(parents=True)
+    (script_dir / "demo.py").write_text(
+        "import functions as f\nf.find(r'C:\\Users\\Eric\\Desktop\\needle.png')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "REPO_ROOT", root)
+
+    analysis = server.analyze_script("scripts/demo/demo.py")
+
+    assert analysis["status"] == "error"
+    assert any(reference["absolute"] for reference in analysis["assetReferences"])
+    assert any(warning["label"] == "Hardcoded path" for warning in analysis["warnings"])
+
+
+def test_analyze_script_rejects_non_bot_files(monkeypatch, tmp_path):
+    root = tmp_path
+    (root / "tool.py").write_text("print('nope')\n", encoding="utf-8")
+    monkeypatch.setattr(server, "REPO_ROOT", root)
+
+    with pytest.raises(ValueError, match="bot scripts"):
+        server.analyze_script("tool.py")
+
+
 def test_portability_config_uses_safe_defaults(monkeypatch):
     monkeypatch.setenv("CHADBOT_BASE_WIDTH", "nope")
     monkeypatch.setenv("CHADBOT_BASE_HEIGHT", "-1")
