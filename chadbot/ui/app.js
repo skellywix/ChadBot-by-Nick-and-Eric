@@ -8,6 +8,7 @@ const state = {
   health: null,
   settings: null,
   portability: null,
+  diagnostics: null,
   settingsDirty: false,
   logCursor: 0,
   logLines: [],
@@ -36,6 +37,11 @@ const el = {
   disableScalingInput: document.querySelector("#disableScalingInput"),
   saveSettings: document.querySelector("#saveSettings"),
   resetSettings: document.querySelector("#resetSettings"),
+  diagnosticsPanel: document.querySelector("#diagnosticsPanel"),
+  diagnosticsStatus: document.querySelector("#diagnosticsStatus"),
+  diagnosticsSummary: document.querySelector("#diagnosticsSummary"),
+  diagnosticsChecks: document.querySelector("#diagnosticsChecks"),
+  refreshDiagnostics: document.querySelector("#refreshDiagnostics"),
   logsView: document.querySelector("#logsView"),
   validationView: document.querySelector("#validationView"),
   fileSearch: document.querySelector("#fileSearch"),
@@ -191,6 +197,49 @@ function renderSettings() {
   el.disableScalingInput.checked = Boolean(state.settings.disableScaling);
 }
 
+function statusLabel(status) {
+  if (status === "error") return "Needs Fix";
+  if (status === "warn") return "Review";
+  return "Ready";
+}
+
+function renderDiagnostics() {
+  const diagnostics = state.diagnostics;
+  if (!diagnostics) {
+    return;
+  }
+
+  const missingDependencies = diagnostics.dependencies.filter((dependency) => dependency.status === "error").length;
+  const screenLabel = diagnostics.screen.available
+    ? `${diagnostics.screen.width} x ${diagnostics.screen.height}`
+    : "Unavailable";
+  const summary = [
+    ["Python", diagnostics.environment.python],
+    ["Screen", screenLabel],
+    ["Packages", missingDependencies ? `${missingDependencies} missing` : "All found"],
+    ["Assets", `${diagnostics.assets.scripts} scripts / ${diagnostics.assets.imageFiles} images`],
+  ];
+
+  el.diagnosticsPanel.dataset.status = diagnostics.status;
+  el.diagnosticsStatus.className = `readiness-badge ${diagnostics.status}`;
+  el.diagnosticsStatus.textContent = statusLabel(diagnostics.status);
+  el.diagnosticsSummary.innerHTML = summary.map(([label, value]) => `
+    <div class="diagnostic-pill">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `).join("");
+  el.diagnosticsChecks.innerHTML = diagnostics.checks.map((check) => `
+    <div class="diagnostic-row ${escapeHtml(check.status)}">
+      <span class="diagnostic-dot"></span>
+      <span>
+        <strong>${escapeHtml(check.label)}</strong>
+        <small>${escapeHtml(check.detail)}</small>
+      </span>
+    </div>
+  `).join("");
+}
+
 function renderDirtyState() {
   const dirty = state.fileContent !== state.savedContent;
   el.dirtyState.textContent = dirty ? "Unsaved changes" : "Saved";
@@ -218,6 +267,12 @@ async function refreshSettings() {
   state.settingsDirty = false;
   renderPortability();
   renderSettings();
+}
+
+async function refreshDiagnostics() {
+  const payload = await api("/api/diagnostics");
+  state.diagnostics = payload.diagnostics;
+  renderDiagnostics();
 }
 
 async function refreshScripts() {
@@ -399,6 +454,7 @@ async function saveSettings() {
   state.settingsDirty = false;
   renderPortability();
   renderSettings();
+  await refreshDiagnostics();
   showToast("Runtime settings applied.");
 }
 
@@ -412,6 +468,7 @@ async function resetSettings() {
   state.settingsDirty = false;
   renderPortability();
   renderSettings();
+  await refreshDiagnostics();
   showToast("Runtime settings reset.");
 }
 
@@ -493,6 +550,7 @@ function bindEvents() {
   document.querySelector("#runCompile").addEventListener("click", () => runValidation("compile").catch((error) => showToast(error.message)));
   el.saveSettings.addEventListener("click", () => saveSettings().catch((error) => showToast(error.message)));
   el.resetSettings.addEventListener("click", () => resetSettings().catch((error) => showToast(error.message)));
+  el.refreshDiagnostics.addEventListener("click", () => refreshDiagnostics().catch((error) => showToast(error.message)));
   document.querySelector("#refreshScripts").addEventListener("click", () => refreshScripts().catch((error) => showToast(error.message)));
   document.querySelector("#refreshFiles").addEventListener("click", () => refreshFiles().catch((error) => showToast(error.message)));
   el.scriptSearch.addEventListener("input", renderScripts);
@@ -517,7 +575,7 @@ function bindEvents() {
 async function init() {
   bindEvents();
   await refreshHealth();
-  await Promise.all([refreshSettings(), refreshScripts(), refreshFiles()]);
+  await Promise.all([refreshSettings(), refreshDiagnostics(), refreshScripts(), refreshFiles()]);
   setInterval(() => refreshStatus().catch(() => {}), 1000);
   setInterval(() => pollLogs().catch(() => {}), 900);
   if (state.files.length) {

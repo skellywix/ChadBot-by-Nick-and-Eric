@@ -25,6 +25,7 @@ The UI provides:
 - Script discovery across the core scripts and `scripts/` activity folders.
 - Start and stop controls for bot scripts.
 - Runtime controls for coordinate baseline, scaling, template scales, and script arguments.
+- A readiness panel for Python packages, screen access, scripts, assets, and runtime storage.
 - Live stdout/stderr logs from the running bot process.
 - A file tree and editor for safe in-repo changes to `.py`, `.json`, `.txt`, `.md`, `.toml`, `.yaml`, `.yml`, `.html`, `.css`, and `.js` files.
 - Save and revert controls for fast bot iteration.
@@ -37,6 +38,7 @@ Safety boundaries:
 - Script execution is limited to discovered Python bot scripts in the repository.
 - File editing is constrained to allowed text/code extensions inside the repository.
 - Validation commands are allowlisted.
+- Diagnostics check dependency availability without importing GUI-heavy modules first.
 - No arbitrary shell command endpoint is exposed.
 
 ## What Is In The Repo

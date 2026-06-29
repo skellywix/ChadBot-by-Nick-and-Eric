@@ -7,10 +7,13 @@ run before the automation dependencies are installed.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import mimetypes
 import os
+import platform
+import shutil
 import subprocess
 import sys
 import threading
@@ -53,6 +56,16 @@ DEFAULT_BASE_WIDTH = 1920
 DEFAULT_BASE_HEIGHT = 1080
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off", ""}
+IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png"}
+RUNTIME_DEPENDENCIES = (
+    {"id": "pyautogui", "label": "PyAutoGUI", "module": "pyautogui", "required": True},
+    {"id": "opencv", "label": "OpenCV", "module": "cv2", "required": True},
+    {"id": "numpy", "label": "NumPy", "module": "numpy", "required": True},
+    {"id": "pillow", "label": "Pillow", "module": "PIL", "required": True},
+    {"id": "pynput", "label": "pynput", "module": "pynput", "required": True},
+    {"id": "pytesseract", "label": "pytesseract", "module": "pytesseract", "required": True},
+    {"id": "pywin32", "label": "pywin32", "module": "win32gui", "required": True},
+)
 
 
 def env_positive_int(name: str, default: int) -> int:
@@ -188,6 +201,169 @@ def portability_config(settings: dict | None = None) -> dict:
         "assetLookup": ["base_dir", "CHADBOT_SCRIPT_DIR", "caller", "cwd", "repo"],
         "repoRoot": str(REPO_ROOT),
         "settingsPath": str(SETTINGS_PATH),
+    }
+
+
+def module_available(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def screen_size_probe() -> dict:
+    try:
+        import pyautogui  # type: ignore[import-not-found]
+
+        size = pyautogui.size()
+        if hasattr(size, "width") and hasattr(size, "height"):
+            width, height = int(size.width), int(size.height)
+        else:
+            width, height = int(size[0]), int(size[1])
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+    return {"available": width > 0 and height > 0, "width": width, "height": height}
+
+
+def status_from_checks(checks: list[dict]) -> str:
+    statuses = {check["status"] for check in checks}
+    if "error" in statuses:
+        return "error"
+    if "warn" in statuses:
+        return "warn"
+    return "ok"
+
+
+def count_repo_files(extensions: set[str], roots: tuple[Path, ...] = (REPO_ROOT,)) -> int:
+    count = 0
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.glob("**/*"):
+            if not path.is_file():
+                continue
+            rel_parts = path.relative_to(REPO_ROOT).parts if is_relative_to(path.resolve(), REPO_ROOT) else path.parts
+            if set(rel_parts) & EXCLUDED_DIRS:
+                continue
+            if path.suffix.lower() in extensions:
+                count += 1
+    return count
+
+
+def runtime_directory_status() -> dict:
+    target = RUNTIME_ROOT if RUNTIME_ROOT.exists() else RUNTIME_ROOT.parent
+    writable = target.exists() and os.access(target, os.W_OK)
+    return {
+        "status": "ok" if writable else "warn",
+        "label": "Runtime storage",
+        "detail": f"Settings and logs use {RUNTIME_ROOT}",
+    }
+
+
+def runtime_diagnostics(
+    module_checker=module_available,
+    executable_checker=shutil.which,
+    screen_probe=screen_size_probe,
+) -> dict:
+    settings = load_runtime_settings()
+    scripts = discover_scripts()
+    editable_files = discover_editable_files()
+    dependencies = []
+    missing_required = []
+    checks = [
+        {
+            "status": "ok",
+            "label": "Python runtime",
+            "detail": f"{platform.python_version()} at {sys.executable}",
+        }
+    ]
+
+    for dependency in RUNTIME_DEPENDENCIES:
+        available = bool(module_checker(dependency["module"]))
+        status = "ok" if available else "error" if dependency["required"] else "warn"
+        dependencies.append({
+            "id": dependency["id"],
+            "label": dependency["label"],
+            "module": dependency["module"],
+            "required": dependency["required"],
+            "status": status,
+        })
+        if not available and dependency["required"]:
+            missing_required.append(dependency["label"])
+
+    if missing_required:
+        checks.append({
+            "status": "error",
+            "label": "Python packages",
+            "detail": f"Missing: {', '.join(missing_required)}",
+        })
+    else:
+        checks.append({
+            "status": "ok",
+            "label": "Python packages",
+            "detail": f"{len(dependencies)} automation packages found",
+        })
+
+    tesseract_path = executable_checker("tesseract")
+    checks.append({
+        "status": "ok" if tesseract_path else "warn",
+        "label": "Tesseract app",
+        "detail": str(tesseract_path) if tesseract_path else "Not on PATH; OCR scripts may fail.",
+    })
+
+    screen = screen_probe()
+    if screen.get("available"):
+        width = int(screen["width"])
+        height = int(screen["height"])
+        scale_x = width / settings["baseWidth"]
+        scale_y = height / settings["baseHeight"]
+        screen.update({
+            "baselineWidth": settings["baseWidth"],
+            "baselineHeight": settings["baseHeight"],
+            "scaleX": round(scale_x, 3),
+            "scaleY": round(scale_y, 3),
+        })
+        checks.append({
+            "status": "ok",
+            "label": "Screen access",
+            "detail": f"{width} x {height}; scale {scale_x:.2f} x {scale_y:.2f}",
+        })
+    else:
+        screen.update({
+            "baselineWidth": settings["baseWidth"],
+            "baselineHeight": settings["baseHeight"],
+        })
+        checks.append({
+            "status": "warn",
+            "label": "Screen access",
+            "detail": screen.get("error") or "PyAutoGUI screen size is unavailable.",
+        })
+
+    checks.append({
+        "status": "ok" if scripts else "error",
+        "label": "Script discovery",
+        "detail": f"{len(scripts)} runnable scripts found",
+    })
+    checks.append(runtime_directory_status())
+
+    assets = {
+        "scripts": len(scripts),
+        "editableFiles": len(editable_files),
+        "imageFiles": count_repo_files(IMAGE_EXTENSIONS),
+        "recordings": count_repo_files({".json"}, roots=(REPO_ROOT / "Recordings", REPO_ROOT / "scripts")),
+    }
+    return {
+        "status": status_from_checks(checks),
+        "generatedAt": time.time(),
+        "environment": {
+            "python": platform.python_version(),
+            "executable": sys.executable,
+            "platform": platform.platform(),
+            "repoRoot": str(REPO_ROOT),
+            "runtimeRoot": str(RUNTIME_ROOT),
+        },
+        "settings": settings,
+        "screen": screen,
+        "dependencies": dependencies,
+        "assets": assets,
+        "checks": checks,
     }
 
 
@@ -481,6 +657,8 @@ class ChadBotHandler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             settings = load_runtime_settings()
             self._json({"settings": settings, "portability": portability_config(settings)})
+        elif path == "/api/diagnostics":
+            self._json({"diagnostics": runtime_diagnostics()})
         elif path == "/api/files/read":
             relative_path = self._first_query_value(query, "path")
             file_path = validate_edit_path(relative_path, must_exist=True)

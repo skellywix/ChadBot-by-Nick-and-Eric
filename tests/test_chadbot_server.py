@@ -130,6 +130,39 @@ def test_save_runtime_settings_rejects_non_object_payload(monkeypatch, tmp_path)
         server.save_runtime_settings([])
 
 
+def test_runtime_diagnostics_reports_missing_dependency(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(server, "RUNTIME_ROOT", tmp_path)
+
+    diagnostics = server.runtime_diagnostics(
+        module_checker=lambda module: module != "cv2",
+        executable_checker=lambda name: None,
+        screen_probe=lambda: {"available": True, "width": 1920, "height": 1080},
+    )
+
+    assert diagnostics["status"] == "error"
+    assert any(dependency["module"] == "cv2" and dependency["status"] == "error" for dependency in diagnostics["dependencies"])
+    assert any(check["label"] == "Python packages" and "OpenCV" in check["detail"] for check in diagnostics["checks"])
+    assert any(check["label"] == "Tesseract app" and check["status"] == "warn" for check in diagnostics["checks"])
+
+
+def test_runtime_diagnostics_reports_screen_scale(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(server, "RUNTIME_ROOT", tmp_path)
+    server.save_runtime_settings({"baseWidth": 1000, "baseHeight": 500})
+
+    diagnostics = server.runtime_diagnostics(
+        module_checker=lambda module: True,
+        executable_checker=lambda name: "C:/Tools/tesseract.exe",
+        screen_probe=lambda: {"available": True, "width": 2000, "height": 1000},
+    )
+
+    assert diagnostics["status"] == "ok"
+    assert diagnostics["screen"]["scaleX"] == 2
+    assert diagnostics["screen"]["scaleY"] == 2
+    assert diagnostics["assets"]["scripts"] == len(server.discover_scripts())
+
+
 def test_validate_edit_path_allows_new_safe_subfolder_file():
     path = server.validate_edit_path("scripts/new_bot/new_bot.py")
 
