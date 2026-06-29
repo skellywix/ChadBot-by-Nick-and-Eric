@@ -3,12 +3,301 @@ import cv2 as cv
 import time
 import pyautogui as pag
 import json
+import inspect
+import os
 from pathlib import Path
 import win32con
 import win32gui
 import win32ui
 import numpy as np
 from PIL import Image
+
+
+REPO_ROOT = Path(__file__).resolve().parent
+DISABLE_SCALING = os.environ.get("CHADBOT_DISABLE_SCALING", "").lower() in {"1", "true", "yes", "on"}
+_FUNCTIONS_PATH = Path(__file__).resolve()
+_ORIGINAL_CV_IMREAD = cv.imread
+_ORIGINAL_PAG_MOVE_TO = pag.moveTo
+_ORIGINAL_PAG_MOVE = getattr(pag, "move", None)
+_ORIGINAL_PAG_CLICK = pag.click
+_ORIGINAL_PAG_RIGHT_CLICK = pag.rightClick
+_ORIGINAL_PAG_DOUBLE_CLICK = pag.doubleClick
+_ORIGINAL_PAG_SCREENSHOT = pag.screenshot
+_ORIGINAL_PAG_PIXEL = getattr(pag, "pixel", None)
+_ORIGINAL_PAG_PIXEL_MATCHES_COLOR = getattr(pag, "pixelMatchesColor", None)
+
+
+def _env_positive_int(name, default):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+BASE_WIDTH = _env_positive_int("CHADBOT_BASE_WIDTH", 1920)
+BASE_HEIGHT = _env_positive_int("CHADBOT_BASE_HEIGHT", 1080)
+
+
+def _current_screen_size():
+    try:
+        size = pag.size()
+        if hasattr(size, "width") and hasattr(size, "height"):
+            return int(size.width), int(size.height)
+        return int(size[0]), int(size[1])
+    except Exception:
+        return BASE_WIDTH, BASE_HEIGHT
+
+
+def coordinate_scale():
+    if DISABLE_SCALING:
+        return 1.0, 1.0
+    width, height = _current_screen_size()
+    if width <= 0 or height <= 0:
+        return 1.0, 1.0
+    return width / BASE_WIDTH, height / BASE_HEIGHT
+
+
+def _scale_value(value, scale):
+    return int(round(float(value) * scale))
+
+
+def scale_point(x, y):
+    sx, sy = coordinate_scale()
+    return _scale_value(x, sx), _scale_value(y, sy)
+
+
+def scale_delta(dx, dy):
+    sx, sy = coordinate_scale()
+    return _scale_value(dx, sx), _scale_value(dy, sy)
+
+
+def unscale_point(x, y):
+    sx, sy = coordinate_scale()
+    return int(round(float(x) / sx)), int(round(float(y) / sy))
+
+
+def scale_region(region):
+    x, y, w, h = region
+    sx, sy = coordinate_scale()
+    return (
+        _scale_value(x, sx),
+        _scale_value(y, sy),
+        max(1, _scale_value(w, sx)),
+        max(1, _scale_value(h, sy)),
+    )
+
+
+def _caller_dir():
+    for frame in inspect.stack()[2:]:
+        try:
+            candidate = Path(frame.filename).resolve()
+        except OSError:
+            continue
+        if candidate != _FUNCTIONS_PATH:
+            return candidate.parent
+    return Path.cwd()
+
+
+def resolve_asset_path(path, base_dir=None, must_exist=True):
+    candidate = Path(path)
+    if candidate.is_absolute():
+        if must_exist and not candidate.exists():
+            raise FileNotFoundError(f"File not found: {candidate}")
+        return candidate
+
+    search_dirs = []
+    if base_dir:
+        search_dirs.append(Path(base_dir))
+    if os.environ.get("CHADBOT_SCRIPT_DIR"):
+        search_dirs.append(Path(os.environ["CHADBOT_SCRIPT_DIR"]))
+    search_dirs.extend([_caller_dir(), Path.cwd(), REPO_ROOT])
+
+    for directory in search_dirs:
+        resolved = (directory / candidate).resolve()
+        if resolved.exists():
+            return resolved
+
+    fallback = (search_dirs[0] / candidate).resolve()
+    if must_exist:
+        raise FileNotFoundError(f"File not found: {path}")
+    return fallback
+
+
+def resolve_output_path(path, base_dir=None):
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+    directory = Path(base_dir) if base_dir else _caller_dir()
+    return (directory / candidate).resolve()
+
+
+def load_image(path, flags=cv.IMREAD_UNCHANGED):
+    resolved = resolve_asset_path(path)
+    image = _ORIGINAL_CV_IMREAD(str(resolved), flags)
+    if image is None:
+        raise FileNotFoundError(f"Image not found or unreadable: {resolved}")
+    return image
+
+
+def _template_scales():
+    explicit = os.environ.get("CHADBOT_TEMPLATE_SCALES")
+    if explicit:
+        scales = []
+        for item in explicit.split(","):
+            item = item.strip().lower()
+            if not item:
+                continue
+            if "x" in item:
+                sx, sy = item.split("x", 1)
+                scales.append((float(sx), float(sy)))
+            else:
+                scale = float(item)
+                scales.append((scale, scale))
+    else:
+        sx, sy = coordinate_scale()
+        average = (sx + sy) / 2
+        scales = [(1.0, 1.0), (sx, sy), (average, average), (sx, sx), (sy, sy)]
+    normalized = []
+    for sx, sy in scales:
+        rounded = (round(sx, 3), round(sy, 3))
+        if rounded[0] > 0 and rounded[1] > 0 and rounded not in normalized:
+            normalized.append(rounded)
+    return normalized
+
+
+def _resize_template(template, scale):
+    sx, sy = scale
+    if sx == 1.0 and sy == 1.0:
+        return template
+    width = max(1, int(round(template.shape[1] * sx)))
+    height = max(1, int(round(template.shape[0] * sy)))
+    return cv.resize(template, (width, height), interpolation=getattr(cv, "INTER_AREA", cv.INTER_CUBIC))
+
+
+def _best_template_match(haystack, needle, method=cv.TM_CCOEFF_NORMED):
+    best = None
+    for scale in _template_scales():
+        scaled_needle = _resize_template(needle, scale)
+        if scaled_needle.shape[0] > haystack.shape[0] or scaled_needle.shape[1] > haystack.shape[1]:
+            continue
+        result = cv.matchTemplate(haystack, scaled_needle, method)
+        min_val, max_val, min_loc, max_loc = cv.minMaxLoc(result)
+        sqdiff_methods = {getattr(cv, "TM_SQDIFF", None), getattr(cv, "TM_SQDIFF_NORMED", None)}
+        score = max_val if method not in sqdiff_methods else -min_val
+        if best is None or score > best["score"]:
+            best = {
+                "score": score,
+                "min_val": min_val,
+                "max_val": max_val,
+                "min_loc": min_loc,
+                "max_loc": max_loc,
+                "needle": scaled_needle,
+                "scale": scale,
+            }
+    if best is None:
+        raise ValueError("Template is larger than the search area at every candidate scale.")
+    return best
+
+
+def move_to(x, y=None, duration=0, *args, **kwargs):
+    if y is None and isinstance(x, (tuple, list)):
+        x, y = x
+    sx, sy = scale_point(x, y)
+    return _ORIGINAL_PAG_MOVE_TO(sx, sy, duration, *args, **kwargs)
+
+
+def move_relative(x_offset=0, y_offset=0, duration=0, *args, **kwargs):
+    if _ORIGINAL_PAG_MOVE is None:
+        raise AttributeError("pyautogui.move is unavailable.")
+    sx, sy = scale_delta(x_offset, y_offset)
+    return _ORIGINAL_PAG_MOVE(sx, sy, duration, *args, **kwargs)
+
+
+def click(x=None, y=None, *args, **kwargs):
+    if y is None and isinstance(x, (tuple, list)):
+        x, y = x
+    if x is not None and y is not None:
+        x, y = scale_point(x, y)
+        return _ORIGINAL_PAG_CLICK(x, y, *args, **kwargs)
+    return _ORIGINAL_PAG_CLICK(x=x, y=y, *args, **kwargs)
+
+
+def right_click(x=None, y=None, *args, **kwargs):
+    if y is None and isinstance(x, (tuple, list)):
+        x, y = x
+    if x is not None and y is not None:
+        x, y = scale_point(x, y)
+        return _ORIGINAL_PAG_RIGHT_CLICK(x, y, *args, **kwargs)
+    return _ORIGINAL_PAG_RIGHT_CLICK(x=x, y=y, *args, **kwargs)
+
+
+def double_click(x=None, y=None, *args, **kwargs):
+    if y is None and isinstance(x, (tuple, list)):
+        x, y = x
+    if x is not None and y is not None:
+        x, y = scale_point(x, y)
+        return _ORIGINAL_PAG_DOUBLE_CLICK(x, y, *args, **kwargs)
+    return _ORIGINAL_PAG_DOUBLE_CLICK(x=x, y=y, *args, **kwargs)
+
+
+def screenshot(imageFilename=None, region=None, *args, **kwargs):
+    if region is not None:
+        kwargs["region"] = scale_region(region)
+    if imageFilename is not None:
+        imageFilename = resolve_output_path(imageFilename)
+    image = _ORIGINAL_PAG_SCREENSHOT(*args, **kwargs)
+    if imageFilename is not None:
+        if hasattr(image, "save"):
+            image.save(imageFilename)
+        else:
+            Image.fromarray(np.asarray(image)).save(imageFilename)
+    return image
+
+
+def pixel(x, y):
+    if _ORIGINAL_PAG_PIXEL is None:
+        raise AttributeError("pyautogui.pixel is unavailable.")
+    sx, sy = scale_point(x, y)
+    return _ORIGINAL_PAG_PIXEL(sx, sy)
+
+
+def pixel_matches_color(x, y, expected_rgb_color, tolerance=0):
+    if _ORIGINAL_PAG_PIXEL_MATCHES_COLOR is None:
+        raise AttributeError("pyautogui.pixelMatchesColor is unavailable.")
+    sx, sy = scale_point(x, y)
+    return _ORIGINAL_PAG_PIXEL_MATCHES_COLOR(sx, sy, expected_rgb_color, tolerance=tolerance)
+
+
+def _cv_imread_compat(filename, flags=None):
+    if flags is None:
+        flags = getattr(cv, "IMREAD_COLOR", 1)
+    try:
+        filename = str(resolve_asset_path(filename))
+    except (FileNotFoundError, TypeError):
+        pass
+    return _ORIGINAL_CV_IMREAD(filename, flags)
+
+
+def install_portability_shims():
+    if getattr(pag, "_chadbot_portability_shims", False):
+        return
+    pag.moveTo = move_to
+    if _ORIGINAL_PAG_MOVE is not None:
+        pag.move = move_relative
+    pag.click = click
+    pag.rightClick = right_click
+    pag.doubleClick = double_click
+    pag.screenshot = screenshot
+    if _ORIGINAL_PAG_PIXEL is not None:
+        pag.pixel = pixel
+    if _ORIGINAL_PAG_PIXEL_MATCHES_COLOR is not None:
+        pag.pixelMatchesColor = pixel_matches_color
+    cv.imread = _cv_imread_compat
+    pag._chadbot_portability_shims = True
+
+
+install_portability_shims()
 
 
 def r(a=0.25, b=0.75):  # Define function and define numbers
@@ -43,7 +332,7 @@ def take_screenshot(area=(0, 0, 1920, 1080), save_img=False, img_name='screensho
     """ This function takes a screenshot of a specified area of the screen and returns it ready for match template."""
     screenshot = pag.screenshot(region=area)
     if save_img:
-        screenshot.save(img_name)
+        screenshot.save(resolve_output_path(img_name))
     screenshot = np.array(screenshot)
     screenshot = cv.cvtColor(screenshot, cv.COLOR_RGB2BGR)
     return screenshot
@@ -177,34 +466,36 @@ def find(locate_img, area=(0, 0, 1920, 1080), threshold=0.50, save_img=False, im
     match for the image within the taken screenshot. It returns the x and y coordinates for the location of the best
     match on screen."""
     haystack = take_screenshot(area, save_img=save_img, img_name=img_name)
-    needle = cv.imread(str(locate_img), cv.IMREAD_UNCHANGED)
-    if needle is None:
-        raise FileNotFoundError(f"Image not found or unreadable: {locate_img}")
-    result = cv.matchTemplate(haystack, needle, cv.TM_CCOEFF_NORMED)
-    min_val, max_val, min_loc, max_loc = cv.minMaxLoc(result)
-
-    if threshold is not None and max_val > threshold:
-        needle_w = round(needle.shape[1] / 2)
-        needle_h = round(needle.shape[0] / 2)
-        estimated_start_loc = (max_loc[0] + needle_w + area[0], max_loc[1] + needle_h + area[1])
-        return estimated_start_loc
-    else:
-        return None
+    needle = load_image(locate_img, getattr(cv, "IMREAD_UNCHANGED", -1))
+    best = _best_template_match(haystack, needle)
+    if threshold is None or best["max_val"] > threshold:
+        needle_w = round(best["needle"].shape[1] / 2)
+        needle_h = round(best["needle"].shape[0] / 2)
+        actual_area = scale_region(area)
+        actual_location = (
+            best["max_loc"][0] + needle_w + actual_area[0],
+            best["max_loc"][1] + needle_h + actual_area[1],
+        )
+        return unscale_point(*actual_location)
+    return None
 
 
 def find_spots(locate_img, threshold=0.50, area=(0, 0, 1920, 1080)):
     """ This function takes in the name of an image file to search, and threshold for image recognition. It will return
     the locations of every match above the threshold."""
     haystack = take_screenshot(area)
-    needle = cv.imread(str(locate_img), cv.IMREAD_UNCHANGED)
-    if needle is None:
-        raise FileNotFoundError(f"Image not found or unreadable: {locate_img}")
-    result = cv.matchTemplate(haystack, needle, cv.TM_CCOEFF_NORMED)
-    locations = np.where(result > threshold)
-    locations = list(zip(*locations[::-1]))
+    needle = load_image(locate_img, getattr(cv, "IMREAD_UNCHANGED", -1))
+    locations = []
+    for scale in _template_scales():
+        scaled_needle = _resize_template(needle, scale)
+        if scaled_needle.shape[0] > haystack.shape[0] or scaled_needle.shape[1] > haystack.shape[1]:
+            continue
+        result = cv.matchTemplate(haystack, scaled_needle, cv.TM_CCOEFF_NORMED)
+        matches = np.where(result > threshold)
+        locations.extend(unscale_point(x, y) for x, y in zip(*matches[::-1]))
     if locations:
-        return locations
-    return []
+        return sorted(set(locations))
+    return None
 
 
 def create_rectangles(locate_img, coordinates, group_threshold=1, eps=0.50):
@@ -212,9 +503,7 @@ def create_rectangles(locate_img, coordinates, group_threshold=1, eps=0.50):
     creates and returns a list of lists containing the x and y coordinates and height and width of the rectangles."""
     if coordinates is None or len(coordinates) == 0:
         return []
-    needle = cv.imread(str(locate_img), cv.IMREAD_UNCHANGED)
-    if needle is None:
-        raise FileNotFoundError(f"Image not found or unreadable: {locate_img}")
+    needle = load_image(locate_img, getattr(cv, "IMREAD_UNCHANGED", -1))
     rectangles = []
     for loc in coordinates:
         rect = [int(loc[0]), int(loc[1]), needle.shape[1], needle.shape[0]]
@@ -367,10 +656,7 @@ def convert_key(key):
 def play_actions(filename, new_path=None):
     """ This function reads json 'recording' files"""
     previous_position = None
-    base_path = Path(new_path) if new_path else Path(__file__).resolve().parent
-    filepath = Path(filename)
-    if not filepath.is_absolute():
-        filepath = base_path / filepath
+    filepath = resolve_asset_path(filename, base_dir=new_path)
     with filepath.open('r', encoding='utf-8') as jsonfile:
         data = json.load(jsonfile)
         for index, action in enumerate(data):
@@ -456,7 +742,15 @@ class WindowCapture:
             self.offset_y = window_rect[1] + self.cropped_y
         else:
             # area = ( x coordinate, y coordinate, width of area, height of area)
-            self.w, self.h, self.cropped_x, self.cropped_y = area[2], area[3], area[0], area[1]
+            scaled_area = scale_region(area)
+            self.w, self.h, self.cropped_x, self.cropped_y = (
+                scaled_area[2],
+                scaled_area[3],
+                scaled_area[0],
+                scaled_area[1],
+            )
+            self.offset_x = self.cropped_x
+            self.offset_y = self.cropped_y
 
     def get_screenshot(self):
         # screenshot_name = "debug.bmp"  # set this
@@ -523,9 +817,7 @@ class Vision:
     def __init__(self, needle_img_path, method=cv.TM_CCOEFF_NORMED):
         # load the image we're trying to match
         # https://docs.opencv.org/4.2.0/d4/da8/group__imgcodecs.html
-        self.needle_img = cv.imread(str(needle_img_path), cv.IMREAD_UNCHANGED)
-        if self.needle_img is None:
-            raise FileNotFoundError(f"Image not found or unreadable: {needle_img_path}")
+        self.needle_img = load_image(needle_img_path, getattr(cv, "IMREAD_UNCHANGED", -1))
 
         # Save the dimensions of the needle image
         self.needle_w = self.needle_img.shape[1]
@@ -536,35 +828,25 @@ class Vision:
         self.method = method
 
     def find(self, haystack_img, threshold=0.5, debug_mode=None):
-        # run the OpenCV algorithm
-        result = cv.matchTemplate(haystack_img, self.needle_img, self.method)
-
-        # Get the all the positions from the match result that exceed our threshold
-        locations = np.where(result >= threshold)
-        locations = list(zip(*locations[::-1]))
-        # print(locations)
-
-        # You'll notice a lot of overlapping rectangles get drawn. We can eliminate those redundant
-        # locations by using groupRectangles().
-        # First we need to create the list of [x, y, w, h] rectangles
+        # Run the match at the current screen scale so templates recorded at
+        # 1920x1080 still work on smaller or larger displays.
         rectangles = []
-        for loc in locations:
-            rect = [int(loc[0]), int(loc[1]), self.needle_w, self.needle_h]
-            # Add every box to the list twice in order to retain single (non-overlapping) boxes
-            rectangles.append(rect)
-            rectangles.append(rect)
-        # Apply group rectangles.
-        # The groupThreshold parameter should usually be 1. If you put it at 0 then no grouping is
-        # done. If you put it at 2 then an object needs at least 3 overlapping rectangles to appear
-        # in the result. I've set eps to 0.5, which is:
-        # "Relative difference between sides of the rectangles to merge them into a group."
+        for scale in _template_scales():
+            needle = _resize_template(self.needle_img, scale)
+            if needle.shape[0] > haystack_img.shape[0] or needle.shape[1] > haystack_img.shape[1]:
+                continue
+            result = cv.matchTemplate(haystack_img, needle, self.method)
+            locations = np.where(result >= threshold)
+            for loc in zip(*locations[::-1]):
+                rect = [int(loc[0]), int(loc[1]), needle.shape[1], needle.shape[0]]
+                # Add every box twice so groupRectangles keeps single, non-overlapping boxes.
+                rectangles.append(rect)
+                rectangles.append(rect)
+
         rectangles, weights = cv.groupRectangles(rectangles, groupThreshold=1, eps=0.5)
-        # print(rectangles)
 
         points = []
         if len(rectangles):
-            # print('Found needle.')
-
             line_color = (0, 255, 0)
             line_type = cv.LINE_4
             marker_color = (255, 0, 255)
@@ -577,7 +859,7 @@ class Vision:
                 center_x = x + int(w/2)
                 center_y = y + int(h/2)
                 # Save the points
-                points.append((center_x, center_y))
+                points.append(unscale_point(center_x, center_y))
 
                 if debug_mode == 'rectangles':
                     # Determine the box position

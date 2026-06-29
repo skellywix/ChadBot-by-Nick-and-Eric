@@ -54,9 +54,45 @@ Safety boundaries:
 These scripts can click, type, scroll, and move the mouse on your active desktop. Run them only in a controlled local environment.
 
 - PyAutoGUI's fail-safe is enabled by `functions.initialize_pag()`. Move the mouse to a screen corner to interrupt PyAutoGUI actions.
-- Many scripts assume a 1920x1080 display, RuneLite UI layout, fixed zoom, and specific inventory/bank positions.
-- Many scripts rely on image files beside the script being run. Run activity scripts from their own directory unless the script already uses absolute or repo-relative paths.
+- Bot coordinates are treated as a 1920x1080 baseline and are scaled at runtime to the current screen size.
+- Image templates and recordings are resolved from the script folder, current working directory, or repository root, so scripts can be started from the UI or from another folder.
+- RuneLite UI layout, client zoom, plugin overlays, and inventory/bank positions still need to be consistent with the template images each script uses.
 - Automation may violate the rules or terms of the software or service being automated. Confirm permission before using these scripts.
+
+## Portability Controls
+
+`functions.py` installs compatibility shims when imported by a script. Existing raw `pyautogui.moveTo`, `click`, `rightClick`, `doubleClick`, `screenshot`, `pixel`, `pixelMatchesColor`, and `cv2.imread` calls then use the same path resolution and coordinate scaling as the shared helpers.
+
+Default coordinate baseline:
+
+```text
+1920x1080
+```
+
+Override it only when a script was authored against a different baseline:
+
+```powershell
+$env:CHADBOT_BASE_WIDTH = "2560"
+$env:CHADBOT_BASE_HEIGHT = "1440"
+```
+
+Disable scaling for troubleshooting:
+
+```powershell
+$env:CHADBOT_DISABLE_SCALING = "1"
+```
+
+OpenCV matching tries the current screen scale automatically. To force specific template scales:
+
+```powershell
+$env:CHADBOT_TEMPLATE_SCALES = "1,0.75,1.25,0.75x0.8"
+```
+
+When scripts are started from the ChadBot UI, the process also receives:
+
+- `CHADBOT_REPO_ROOT`
+- `CHADBOT_SCRIPT_DIR`
+- `CHADBOT_SCRIPT_PATH`
 
 ## Setup
 
