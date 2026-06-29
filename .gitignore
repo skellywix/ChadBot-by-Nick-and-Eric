@@ -13,6 +13,7 @@ env/
 .ruff_cache/
 .coverage
 htmlcov/
+chadbot/runtime/
 
 *.log
 *.tmp

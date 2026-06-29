@@ -107,6 +107,37 @@
             <input id="scriptArgs" type="text" spellcheck="false" placeholder="Optional arguments">
           </label>
 
+          <div class="settings-panel">
+            <div class="settings-grid">
+              <label>
+                <span>Base Width</span>
+                <input id="baseWidthInput" type="number" min="1" step="1">
+              </label>
+              <label>
+                <span>Base Height</span>
+                <input id="baseHeightInput" type="number" min="1" step="1">
+              </label>
+              <label class="wide">
+                <span>Template Scales</span>
+                <input id="templateScalesInput" type="text" spellcheck="false" placeholder="auto">
+              </label>
+              <label class="toggle-field">
+                <input id="disableScalingInput" type="checkbox">
+                <span>Disable Scaling</span>
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button class="text-button" id="resetSettings">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5"></path></svg>
+                Reset
+              </button>
+              <button class="text-button primary" id="saveSettings">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 9 16l10-11"></path></svg>
+                Apply
+              </button>
+            </div>
+          </div>
+
           <div class="tabs">
             <button class="tab active" data-view="logs">Live Logs</button>
             <button class="tab" data-view="validation">Validation</button>

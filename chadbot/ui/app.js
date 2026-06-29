@@ -6,6 +6,9 @@ const state = {
   fileContent: "",
   savedContent: "",
   health: null,
+  settings: null,
+  portability: null,
+  settingsDirty: false,
   logCursor: 0,
   logLines: [],
   running: false,
@@ -27,6 +30,12 @@ const el = {
   templateScaleValue: document.querySelector("#templateScaleValue"),
   scriptDirValue: document.querySelector("#scriptDirValue"),
   scriptArgs: document.querySelector("#scriptArgs"),
+  baseWidthInput: document.querySelector("#baseWidthInput"),
+  baseHeightInput: document.querySelector("#baseHeightInput"),
+  templateScalesInput: document.querySelector("#templateScalesInput"),
+  disableScalingInput: document.querySelector("#disableScalingInput"),
+  saveSettings: document.querySelector("#saveSettings"),
+  resetSettings: document.querySelector("#resetSettings"),
   logsView: document.querySelector("#logsView"),
   validationView: document.querySelector("#validationView"),
   fileSearch: document.querySelector("#fileSearch"),
@@ -163,13 +172,23 @@ function renderRunState(status = {}) {
 }
 
 function renderPortability() {
-  const portability = state.health?.portability;
+  const portability = state.portability || state.health?.portability;
   if (!portability) {
     return;
   }
   el.baselineValue.textContent = `${portability.baseWidth} x ${portability.baseHeight}`;
   el.scalingValue.textContent = portability.scalingDisabled ? "Off" : "Auto";
   el.templateScaleValue.textContent = portability.templateScales === "auto" ? "Auto" : portability.templateScales;
+}
+
+function renderSettings() {
+  if (!state.settings || state.settingsDirty) {
+    return;
+  }
+  el.baseWidthInput.value = state.settings.baseWidth;
+  el.baseHeightInput.value = state.settings.baseHeight;
+  el.templateScalesInput.value = state.settings.templateScales || "";
+  el.disableScalingInput.checked = Boolean(state.settings.disableScaling);
 }
 
 function renderDirtyState() {
@@ -182,6 +201,7 @@ async function refreshHealth() {
   try {
     const health = await api("/api/health");
     state.health = health;
+    state.portability = health.portability;
     el.serverStatus.textContent = health.local ? "Local" : health.status;
     el.serverDot.classList.remove("error");
     renderPortability();
@@ -189,6 +209,15 @@ async function refreshHealth() {
     el.serverStatus.textContent = "Disconnected";
     el.serverDot.classList.add("error");
   }
+}
+
+async function refreshSettings() {
+  const payload = await api("/api/settings");
+  state.settings = payload.settings;
+  state.portability = payload.portability;
+  state.settingsDirty = false;
+  renderPortability();
+  renderSettings();
 }
 
 async function refreshScripts() {
@@ -312,6 +341,80 @@ async function runValidation(check) {
   showToast(payload.returnCode === 0 ? `${check} passed.` : `${check} failed.`);
 }
 
+function readSettingsForm() {
+  const baseWidth = Number(el.baseWidthInput.value);
+  const baseHeight = Number(el.baseHeightInput.value);
+  if (!Number.isInteger(baseWidth) || baseWidth <= 0 || !Number.isInteger(baseHeight) || baseHeight <= 0) {
+    throw new Error("Base size must use positive whole numbers.");
+  }
+  return {
+    baseWidth,
+    baseHeight,
+    disableScaling: el.disableScalingInput.checked,
+    templateScales: normalizeTemplateScales(el.templateScalesInput.value),
+  };
+}
+
+function normalizeTemplateScales(value) {
+  const text = value.trim();
+  if (!text) {
+    return "";
+  }
+  const normalized = [];
+  for (const item of text.split(",")) {
+    const token = item.trim().toLowerCase();
+    if (!token) {
+      continue;
+    }
+    if (token.includes("x")) {
+      const parts = token.split("x");
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
+        throw new Error("Template scales must use values like 1,0.75,1.25 or 0.75x0.8.");
+      }
+      const sx = Number(parts[0]);
+      const sy = Number(parts[1]);
+      if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0) {
+        throw new Error("Template scales must use positive numbers.");
+      }
+      normalized.push(`${sx}x${sy}`);
+    } else {
+      const scale = Number(token);
+      if (!Number.isFinite(scale) || scale <= 0) {
+        throw new Error("Template scales must use positive numbers.");
+      }
+      normalized.push(String(scale));
+    }
+  }
+  return normalized.join(",");
+}
+
+async function saveSettings() {
+  const settings = readSettingsForm();
+  const payload = await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({ settings }),
+  });
+  state.settings = payload.settings;
+  state.portability = payload.portability;
+  state.settingsDirty = false;
+  renderPortability();
+  renderSettings();
+  showToast("Runtime settings applied.");
+}
+
+async function resetSettings() {
+  const payload = await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({ action: "reset" }),
+  });
+  state.settings = payload.settings;
+  state.portability = payload.portability;
+  state.settingsDirty = false;
+  renderPortability();
+  renderSettings();
+  showToast("Runtime settings reset.");
+}
+
 function activateTab(view) {
   for (const tab of document.querySelectorAll(".tab")) {
     tab.classList.toggle("active", tab.dataset.view === view);
@@ -388,6 +491,8 @@ function bindEvents() {
   document.querySelector("#newFile").addEventListener("click", () => createFile());
   document.querySelector("#runPytest").addEventListener("click", () => runValidation("pytest").catch((error) => showToast(error.message)));
   document.querySelector("#runCompile").addEventListener("click", () => runValidation("compile").catch((error) => showToast(error.message)));
+  el.saveSettings.addEventListener("click", () => saveSettings().catch((error) => showToast(error.message)));
+  el.resetSettings.addEventListener("click", () => resetSettings().catch((error) => showToast(error.message)));
   document.querySelector("#refreshScripts").addEventListener("click", () => refreshScripts().catch((error) => showToast(error.message)));
   document.querySelector("#refreshFiles").addEventListener("click", () => refreshFiles().catch((error) => showToast(error.message)));
   el.scriptSearch.addEventListener("input", renderScripts);
@@ -396,6 +501,14 @@ function bindEvents() {
     state.fileContent = el.editor.value;
     renderDirtyState();
   });
+  for (const input of [el.baseWidthInput, el.baseHeightInput, el.templateScalesInput, el.disableScalingInput]) {
+    input.addEventListener("input", () => {
+      state.settingsDirty = true;
+    });
+    input.addEventListener("change", () => {
+      state.settingsDirty = true;
+    });
+  }
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", () => activateTab(tab.dataset.view));
   }
@@ -404,7 +517,7 @@ function bindEvents() {
 async function init() {
   bindEvents();
   await refreshHealth();
-  await Promise.all([refreshScripts(), refreshFiles()]);
+  await Promise.all([refreshSettings(), refreshScripts(), refreshFiles()]);
   setInterval(() => refreshStatus().catch(() => {}), 1000);
   setInterval(() => pollLogs().catch(() => {}), 900);
   if (state.files.length) {
