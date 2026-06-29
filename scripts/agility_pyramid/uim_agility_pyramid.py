@@ -130,4 +130,5 @@ def main():
             reset_position()
 
 
-main()
+if __name__ == "__main__":
+    main()

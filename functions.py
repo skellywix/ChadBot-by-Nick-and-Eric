@@ -2,8 +2,8 @@ import random
 import cv2 as cv
 import time
 import pyautogui as pag
-import os
 import json
+from pathlib import Path
 import win32con
 import win32gui
 import win32ui
@@ -106,8 +106,12 @@ def to_pil_and_resize(cv_image, x=5, y=5, resize=True):
         return Image.fromarray(rgb_image)
 
 
-def move_click(x, y, move_duration=r(), wait_duration=r(), r1=p(), r2=p(), double_click=False):
+def move_click(x, y, move_duration=None, wait_duration=None, r1=None, r2=None, double_click=False):
     """ This function takes in x and y coordinates, and a movement and wait duration and executes actions."""
+    move_duration = r() if move_duration is None else move_duration
+    wait_duration = r() if wait_duration is None else wait_duration
+    r1 = p() if r1 is None else r1
+    r2 = p() if r2 is None else r2
     pag.moveTo(x + r1, y + r2, move_duration)
     if double_click:
         pag.doubleClick()
@@ -116,8 +120,12 @@ def move_click(x, y, move_duration=r(), wait_duration=r(), r1=p(), r2=p(), doubl
     time.sleep(wait_duration)
 
 
-def move_right_click(x, y, move_duration=r(), wait_duration=r(), r1=p(), r2=p()):
+def move_right_click(x, y, move_duration=None, wait_duration=None, r1=None, r2=None):
     """ This function takes in x and y coordinates, and a movement and wait duration and executes actions."""
+    move_duration = r() if move_duration is None else move_duration
+    wait_duration = r() if wait_duration is None else wait_duration
+    r1 = p() if r1 is None else r1
+    r2 = p() if r2 is None else r2
     pag.moveTo(x + r1, y + r2, move_duration)
     pag.rightClick()
     time.sleep(wait_duration)
@@ -151,11 +159,11 @@ def check_pixel_color_in_area(
     img = pag.screenshot(region=(x, y, w, h))
 
     # 2. Convert image to NumPy array (H, W, 3)
-    arr = np.array(img)
+    arr = np.array(img).astype(np.int16)
 
     # 3. Calculate absolute difference
     # arr is RGB, but pyautogui.pixelMatchesColor uses RGB too
-    diff = np.abs(arr - np.array(target_color))
+    diff = np.abs(arr - np.array(target_color, dtype=np.int16))
 
     # 4. Check if all 3 channels are within tolerance
     match = np.all(diff <= tolerance, axis=2)
@@ -169,7 +177,9 @@ def find(locate_img, area=(0, 0, 1920, 1080), threshold=0.50, save_img=False, im
     match for the image within the taken screenshot. It returns the x and y coordinates for the location of the best
     match on screen."""
     haystack = take_screenshot(area, save_img=save_img, img_name=img_name)
-    needle = cv.imread(locate_img, cv.IMREAD_UNCHANGED)
+    needle = cv.imread(str(locate_img), cv.IMREAD_UNCHANGED)
+    if needle is None:
+        raise FileNotFoundError(f"Image not found or unreadable: {locate_img}")
     result = cv.matchTemplate(haystack, needle, cv.TM_CCOEFF_NORMED)
     min_val, max_val, min_loc, max_loc = cv.minMaxLoc(result)
 
@@ -186,21 +196,25 @@ def find_spots(locate_img, threshold=0.50, area=(0, 0, 1920, 1080)):
     """ This function takes in the name of an image file to search, and threshold for image recognition. It will return
     the locations of every match above the threshold."""
     haystack = take_screenshot(area)
-    needle = cv.imread(locate_img, cv.IMREAD_UNCHANGED)
+    needle = cv.imread(str(locate_img), cv.IMREAD_UNCHANGED)
+    if needle is None:
+        raise FileNotFoundError(f"Image not found or unreadable: {locate_img}")
     result = cv.matchTemplate(haystack, needle, cv.TM_CCOEFF_NORMED)
     locations = np.where(result > threshold)
     locations = list(zip(*locations[::-1]))
     if locations:
         return locations
-    else:
-        pass
-        # print('No results found.')
+    return []
 
 
 def create_rectangles(locate_img, coordinates, group_threshold=1, eps=0.50):
     """ This function takes in the name of an image to read, coordinates for locations, and function parameters. It then
     creates and returns a list of lists containing the x and y coordinates and height and width of the rectangles."""
-    needle = cv.imread(locate_img, cv.IMREAD_UNCHANGED)
+    if coordinates is None or len(coordinates) == 0:
+        return []
+    needle = cv.imread(str(locate_img), cv.IMREAD_UNCHANGED)
+    if needle is None:
+        raise FileNotFoundError(f"Image not found or unreadable: {locate_img}")
     rectangles = []
     for loc in coordinates:
         rect = [int(loc[0]), int(loc[1]), needle.shape[1], needle.shape[0]]
@@ -213,7 +227,7 @@ def create_rectangles(locate_img, coordinates, group_threshold=1, eps=0.50):
 def draw_rectangles(haystack, locations, show=True):
     """ This function takes in an imread image and a list of rectangles and draws and draws a rectangle around
     each search result."""
-    if len(locations):
+    if locations is not None and len(locations):
         line_color = (0, 0, 255)
         line_type = cv.LINE_4
 
@@ -231,7 +245,7 @@ def draw_rectangles(haystack, locations, show=True):
 def draw_markers(haystack, rectangles, show=True):
     """ This function takes in an imread image and a list of rectangles and draws and draws a marker on
         each search result."""
-    if len(rectangles):
+    if rectangles is not None and len(rectangles):
         marker_color = (255, 0, 255)
         marker_type = cv.MARKER_CROSS
         for (x, y, w, h) in rectangles:
@@ -277,13 +291,13 @@ def shift_camera_direction(direction='north', up=True):
 
 def create_inv_grid(tl=(1683, 746), br=(1851, 998), rows=7, columns=4):
     grid = {}
-    x = int((br[0] - tl[0]) / columns)
-    y = int((br[1] - tl[1]) / rows)
+    cell_w = int((br[0] - tl[0]) / columns)
+    cell_h = int((br[1] - tl[1]) / rows)
     count = 0
-    for row in range(tl[1], br[1], y):
-        for column in range(tl[0], br[0], x):
+    for row in range(tl[1], br[1], cell_h):
+        for column in range(tl[0], br[0], cell_w):
             count += 1
-            grid[f'Slot {count}'] = int(round(column + y/2)), int(round(row + x/2))
+            grid[f'Slot {count}'] = int(round(column + cell_w/2)), int(round(row + cell_h/2))
     return grid
 
 
@@ -353,12 +367,11 @@ def convert_key(key):
 def play_actions(filename, new_path=None):
     """ This function reads json 'recording' files"""
     previous_position = None
-    if new_path:
-        script_dir = new_path
-    else:
-        script_dir = os.path.dirname(__file__)
-    filepath = os.path.join(script_dir, filename)
-    with open(filepath, 'r') as jsonfile:
+    base_path = Path(new_path) if new_path else Path(__file__).resolve().parent
+    filepath = Path(filename)
+    if not filepath.is_absolute():
+        filepath = base_path / filepath
+    with filepath.open('r', encoding='utf-8') as jsonfile:
         data = json.load(jsonfile)
         for index, action in enumerate(data):
             start_time = time.time()
@@ -372,7 +385,7 @@ def play_actions(filename, new_path=None):
             elif action['type'] == 'KeyUp':
                 key = convert_key(action['button'])
                 # key = key[4:] if key[:4] == 'Key.' else key
-                pag.keyDown(key)
+                pag.keyUp(key)
 
             elif action['type'] == 'clickDown':
                 previous_position = (action['pos'][0], action['pos'][1])
@@ -459,7 +472,7 @@ class WindowCapture:
         # save screenshot
         # dataBitMap.SaveBitmapFile(cDC, screenshot_name)
         signedIntsArray = dataBitMap.GetBitmapBits(True)
-        screencapture = np.fromstring(signedIntsArray, dtype='uint8')
+        screencapture = np.frombuffer(signedIntsArray, dtype='uint8')
         screencapture.shape = (self.h, self.w, 4)
 
         # Free Resources
@@ -510,7 +523,9 @@ class Vision:
     def __init__(self, needle_img_path, method=cv.TM_CCOEFF_NORMED):
         # load the image we're trying to match
         # https://docs.opencv.org/4.2.0/d4/da8/group__imgcodecs.html
-        self.needle_img = cv.imread(needle_img_path, cv.IMREAD_UNCHANGED)
+        self.needle_img = cv.imread(str(needle_img_path), cv.IMREAD_UNCHANGED)
+        if self.needle_img is None:
+            raise FileNotFoundError(f"Image not found or unreadable: {needle_img_path}")
 
         # Save the dimensions of the needle image
         self.needle_w = self.needle_img.shape[1]

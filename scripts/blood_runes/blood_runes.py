@@ -191,4 +191,5 @@ def main(set_up=True, fresh_start=True, time_cap=10):
     print(f'Script duration: {str(datetime.timedelta(seconds=time.time() - start_time))}')
 
 
-main(set_up=True, fresh_start=True, time_cap=11)
+if __name__ == "__main__":
+    main(set_up=True, fresh_start=True, time_cap=11)

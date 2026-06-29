@@ -466,4 +466,5 @@ def main(setup=True):
 
 
 # process_inv()
-main(True)
+if __name__ == "__main__":
+    main(True)

@@ -1,19 +1,19 @@
 import cv2 as cv
-import os
-import pyautogui as pag
 import numpy as np
-import functions as f
+from pathlib import Path
 
 
-TEMPLATE_DIR = r"C:\Users\nickp\PythonWork\Pyautogui\scripts\number_extraction"
+TEMPLATE_DIR = Path(__file__).resolve().parent / "scripts" / "number_extraction"
 
 
 def load_templates(prefix=""):
     templates = {}
     for d in range(10):
         filename = f"{prefix}{d}.png"
-        path = os.path.join(TEMPLATE_DIR, filename)
-        img = cv.imread(path, cv.IMREAD_GRAYSCALE)
+        path = TEMPLATE_DIR / filename
+        img = cv.imread(str(path), cv.IMREAD_GRAYSCALE)
+        if img is None:
+            raise FileNotFoundError(f"Digit template not found or unreadable: {path}")
         templates[d] = img
     return templates
 
@@ -23,8 +23,8 @@ def preprocess(img, save_img=False):
     _, bw = cv.threshold(gray, 200, 255, cv.THRESH_BINARY_INV)
 
     if save_img:
-        save_path = os.path.join(TEMPLATE_DIR, "processed_img.png")
-        cv.imwrite(save_path, bw)
+        save_path = TEMPLATE_DIR / "processed_img.png"
+        cv.imwrite(str(save_path), bw)
 
     return bw
 
@@ -40,8 +40,8 @@ def preprocess_world_number(img, save_img=False):
     binary = cv.bitwise_not(binary)
 
     if save_img:
-        save_path = os.path.join(TEMPLATE_DIR, "processed_wrld_img.png")
-        cv.imwrite(save_path, binary)
+        save_path = TEMPLATE_DIR / "processed_wrld_img.png"
+        cv.imwrite(str(save_path), binary)
 
     return binary
 
@@ -127,6 +127,8 @@ def read_digits(img, number_type='', debug=False):
         processed = preprocess(img, save_img=debug)
     elif number_type == 'w':
         processed = preprocess_world_number(img, save_img=debug)
+    else:
+        raise ValueError(f"Unsupported number_type: {number_type}")
 
     trim_img = trim_vertical_whitespace(processed)
     digits = split_connected_digits(trim_img)

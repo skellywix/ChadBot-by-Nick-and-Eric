@@ -5,6 +5,10 @@ import datetime
 import cv2 as cv
 import numpy as np
 import world_hopper as wh
+from pathlib import Path
+
+
+TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "blast_furnace" / "templates"
 
 
 # SETUP ----------------------------------------------------------------
@@ -51,8 +55,7 @@ def deposit_all_check():
 
 def tab_3():
     # current screenshot
-    correct_tab = f.find(r"C:\Users\nickp\PythonWork\Pyautogui\scripts\blast_furnace\templates\tab_3.png",
-                         (749, 56, 100, 20), threshold=0.95)
+    correct_tab = f.find(TEMPLATE_DIR / "tab_3.png", (749, 56, 100, 20), threshold=0.95)
     # print(correct_tab)
     if correct_tab:
         # print('Currently on tab 3!')
@@ -205,4 +208,5 @@ def main(setup=True):
     print(f'Script duration: {str(datetime.timedelta(seconds=time.time() - start_time))}')
 
 
-main(True)
+if __name__ == "__main__":
+    main(True)

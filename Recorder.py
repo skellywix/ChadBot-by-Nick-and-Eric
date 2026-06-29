@@ -1,4 +1,5 @@
-import os
+from argparse import ArgumentParser
+from pathlib import Path
 from pynput import mouse, keyboard
 from time import time
 import json
@@ -79,6 +80,8 @@ def on_click(x, y, button, pressed):
 
 def run_listeners():
     global mouse_listener
+    global start_time
+    start_time = time()
     mouse_listener = mouse.Listener(on_click=on_click)
     mouse_listener.start()
     mouse_listener.wait()
@@ -86,27 +89,54 @@ def run_listeners():
     with keyboard.Listener(
             on_press=on_press,
             on_release=on_release) as listener:
-        global start_time
-        start_time = time()
         listener.join()
 
 
 def elapsed_time():
     global start_time
+    if start_time is None:
+        return 0
     return time() - start_time
 
 
-def main():
+def parse_args():
+    parser = ArgumentParser(description="Record mouse and keyboard events to a JSON playback file.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=OUTPUT_FILENAME,
+        help="Output filename without .json. Defaults to bank_fish.",
+    )
+    return parser.parse_args()
+
+
+def build_output_path(output_filename, output_dir=None):
+    output_dir = Path(output_dir) if output_dir else Path(__file__).resolve().parent / 'Recordings'
+    output_name = Path(output_filename)
+    if (
+        output_name.is_absolute()
+        or output_name.parent != Path('.')
+        or not output_name.name
+        or output_name.name in {'.', '..'}
+    ):
+        raise ValueError("Output must be a filename, not a path.")
+    if output_name.suffix != '.json':
+        output_name = output_name.with_name(f'{output_name.name}.json')
+    return output_dir / output_name.name
+
+
+def main(output_filename=OUTPUT_FILENAME):
     run_listeners()
     print(f'Recording duration: {elapsed_time()} seconds')
     global input_events
     print(json.dumps(input_events))
 
-    script_dir = os.path.dirname(__file__)
-    filepath = os.path.join(script_dir, 'Recordings', f'{OUTPUT_FILENAME}.json')
-    with open(filepath, 'w') as outfile:
+    filepath = build_output_path(output_filename)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    with filepath.open('w', encoding='utf-8') as outfile:
         json.dump(input_events, outfile, indent=4)
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args.output)

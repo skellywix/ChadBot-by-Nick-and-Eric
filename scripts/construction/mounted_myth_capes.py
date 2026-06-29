@@ -115,4 +115,5 @@ def main():
     print(f'Total mythical capes built: {capes_built}')
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -167,4 +167,5 @@ def main(setup=False):
     print('Done!')
 
 
-main(True)
+if __name__ == "__main__":
+    main(True)

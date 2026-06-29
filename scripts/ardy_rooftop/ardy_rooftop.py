@@ -50,4 +50,5 @@ def main(setup=True):
             print(f'Taking a {sleep_time} second break.')
 
 
-main()
+if __name__ == "__main__":
+    main()

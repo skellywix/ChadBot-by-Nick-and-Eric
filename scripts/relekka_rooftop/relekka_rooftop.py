@@ -112,7 +112,8 @@ def main():
         print(f'Lap {n} done!')
 
 
-main()
+if __name__ == "__main__":
+    main()
 
 # p = pag.pixel(864, 468)
 # print(p)

@@ -4,8 +4,10 @@ import pyautogui as pag
 import cv2 as cv
 import numpy as np
 import datetime
+from pathlib import Path
 
 # functions are designed to work at 25% zoom
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 needle = cv.imread('fish2.png', cv.IMREAD_UNCHANGED)
 reset_tile = cv.imread('reset_tile.png', cv.IMREAD_UNCHANGED)
@@ -112,7 +114,7 @@ def bank_fish(filename):
     time.sleep(f.r(0, 0.10))
     pag.click()
     time.sleep(5 + f.r(1, 2))
-    f.play_actions(f'C:\\Users\\nickp\\PythonWork\\Pyautogui\\scripts\\anglerfish\\{filename}.json')
+    f.play_actions(f'{filename}.json', new_path=SCRIPT_DIR)
     time.sleep(6 + f.r(1, 2))
     fish_caught += 45
 
@@ -184,6 +186,7 @@ def main(setup=False):
 
 
 # bank_fish('bank_fish')
-main(True)
+if __name__ == "__main__":
+    main(True)
 
 # bank_fish('bank_fish')

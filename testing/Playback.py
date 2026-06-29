@@ -61,7 +61,7 @@ def play_actions(filename):
             elif action['type'] == 'KeyUp':
                 key = convert_key(action['button'])
                 # key = key[4:] if key[:4] == 'Key.' else key
-                pag.keyDown(key)
+                pag.keyUp(key)
 
             elif action['type'] == 'clickDown':
                 previous_position = (action['pos'][0], action['pos'][1])
@@ -99,4 +99,5 @@ def main():
     play_actions('test.json')
 
 
-main()
+if __name__ == "__main__":
+    main()

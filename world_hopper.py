@@ -2,19 +2,20 @@ import pyautogui as pag
 import functions as f
 import cv2 as cv
 import sys
-import os
 import numpy as np
 import digit_extractor as de
 from collections import deque
 import json
 import time
+from pathlib import Path
 
-VISITED_JSON = r"C:\Users\nickp\PythonWork\Pyautogui\scripts\number_extraction\travel_log.json"
-# Add the number_extraction folder to Python's module search path
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-EXTRACTOR_DIR = os.path.join(SCRIPT_DIR, "scripts", "number_extraction")
 
-sys.path.append(os.path.abspath(EXTRACTOR_DIR))
+SCRIPT_DIR = Path(__file__).resolve().parent
+EXTRACTOR_DIR = SCRIPT_DIR / "scripts" / "number_extraction"
+VISITED_JSON = EXTRACTOR_DIR / "travel_log.json"
+HIGH_LEVEL_WORLD_IMAGE = EXTRACTOR_DIR / "2350_total_world.png"
+
+sys.path.append(str(EXTRACTOR_DIR.resolve()))
 
 
 def world_tab(command):
@@ -59,7 +60,10 @@ def scroll_world_tab(direction='down', x=600):
 
 
 def load_travel_log(maxlen=15, clean=False):
-    with open(VISITED_JSON, "r") as f:
+    if not VISITED_JSON.exists():
+        VISITED_JSON.parent.mkdir(parents=True, exist_ok=True)
+        VISITED_JSON.write_text('{"visited": []}', encoding='utf-8')
+    with VISITED_JSON.open("r", encoding='utf-8') as f:
         data = json.load(f)
     travel_log = deque(data["visited"], maxlen=maxlen)
     if clean:
@@ -80,7 +84,7 @@ def record_visit(travel_log, world_num):
                        "timestamp": time.time()})
 
     # Save updated list to JSON
-    with open(VISITED_JSON, "w") as f:
+    with VISITED_JSON.open("w", encoding='utf-8') as f:
         json.dump({"visited": list(travel_log)}, f, indent=4)
 
 
@@ -112,6 +116,8 @@ def create_world_list(length):
     change_indices = np.where(diffs)[0] + 1 + 50
 
     adjusted_worlds = []
+    if len(change_indices) == 0:
+        return adjusted_worlds
     last_y = change_indices[0]
 
     for y in change_indices[1:]:
@@ -159,7 +165,9 @@ def check_activity(world, debug=False):
     screenshot = f.take_screenshot(area=(x, y-5, 24, 8))
     screenshot = de.preprocess(screenshot)
 
-    png = cv.imread(r'C:\Users\nickp\PythonWork\Pyautogui\scripts\number_extraction\2350_total_world.png')
+    png = cv.imread(str(HIGH_LEVEL_WORLD_IMAGE))
+    if png is None:
+        raise FileNotFoundError(f"Image not found or unreadable: {HIGH_LEVEL_WORLD_IMAGE}")
     png = de.preprocess(png)
 
     if np.array_equal(png, screenshot):
@@ -258,7 +266,7 @@ def hop_world(hop_counter=0):
     elapsed_time = 0
     chosen_world = None
 
-    print('Chosing world ...', end='')
+    print('Choosing world ...', end='')
     while chosen_world is None:
 
         elapsed_time = time.time() - start_time

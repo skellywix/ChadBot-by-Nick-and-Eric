@@ -146,4 +146,5 @@ def run_game():
     choose_mission()
 
 
-run_game()
+if __name__ == "__main__":
+    run_game()

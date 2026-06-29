@@ -79,4 +79,5 @@ def main(set_up=True):
     print(f'Total fish caught: {fish_caught}')
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -137,5 +137,6 @@ def main(setup=False):
     print(f'Script duration: {str(datetime.timedelta(seconds=time.time() - start_time))}')
 
 
-main()
+if __name__ == "__main__":
+    main()
 

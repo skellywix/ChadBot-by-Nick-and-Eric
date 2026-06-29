@@ -67,4 +67,5 @@ def main(n=27):
         high_alch(inventory, slot, count)
         print()
 
-main(3)
+if __name__ == "__main__":
+    main(3)

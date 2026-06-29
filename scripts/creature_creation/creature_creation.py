@@ -87,4 +87,5 @@ def main():
         print(f'Trip {n} done!')
 
 
-main()
+if __name__ == "__main__":
+    main()

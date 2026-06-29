@@ -68,9 +68,9 @@ def main(inventory, quantities):
         print()
 
 
-# inventory is 168 about pixels wide, about 252 tall
-inv = create_grid(tl=(1683, 746), br=(1851, 998), rows=7, columns=4)  #cretes inventory grid
-number_of_alchemy = quantify_inv(inv)[0:24]
-print(number_of_alchemy)
-
-main(inv, number_of_alchemy)
+if __name__ == "__main__":
+    # inventory is about 168 pixels wide and 252 pixels tall
+    inv = create_grid(tl=(1683, 746), br=(1851, 998), rows=7, columns=4)
+    number_of_alchemy = quantify_inv(inv)[0:24]
+    print(number_of_alchemy)
+    main(inv, number_of_alchemy)

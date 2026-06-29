@@ -17,7 +17,8 @@ def main():
         print(f'Loop {n} done!')
 
 
-main()
+if __name__ == "__main__":
+    main()
 
 # time.sleep(3)
 # pag.keyDown('up', 5)

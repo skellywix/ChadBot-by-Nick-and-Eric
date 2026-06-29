@@ -91,4 +91,5 @@ def main(setup=False):
     print(f'Total pickpockets: {pickpocket_count}')
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -133,7 +133,8 @@ def main():
             time.sleep(5)
 
 
-main()
+if __name__ == "__main__":
+    main()
 
 # trade_with_simon()
 # reset_position()

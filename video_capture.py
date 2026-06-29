@@ -1,17 +1,11 @@
-import os
 import cv2 as cv
-import functions as f
 import time
 from functions import WindowCapture, Vision
 
-# initialize the WindowCapture class
 
-wincap = WindowCapture()
-# initialize the Vision class
-vision_limestone = Vision('search_img.png')
-
-
-def capture_runelite():
+def capture_runelite(search_image='search_img.png'):
+    wincap = WindowCapture()
+    vision_limestone = Vision(search_image)
 
     loop_time = time.time()
 
@@ -36,4 +30,5 @@ def capture_runelite():
 
     print('Done.')
 
-capture_runelite()
+if __name__ == "__main__":
+    capture_runelite()

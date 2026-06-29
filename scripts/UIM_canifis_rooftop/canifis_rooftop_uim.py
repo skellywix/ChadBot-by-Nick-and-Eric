@@ -77,4 +77,5 @@ def main():
         print(f"Lap {n} done!")
 
 
-main()
+if __name__ == "__main__":
+    main()
