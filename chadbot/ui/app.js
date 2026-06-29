@@ -5,7 +5,9 @@ const state = {
   selectedFile: null,
   fileContent: "",
   savedContent: "",
+  health: null,
   logCursor: 0,
+  logLines: [],
   running: false,
 };
 
@@ -20,6 +22,11 @@ const el = {
   activeScriptLabel: document.querySelector("#activeScriptLabel"),
   processState: document.querySelector("#processState"),
   uptime: document.querySelector("#uptime"),
+  baselineValue: document.querySelector("#baselineValue"),
+  scalingValue: document.querySelector("#scalingValue"),
+  templateScaleValue: document.querySelector("#templateScaleValue"),
+  scriptDirValue: document.querySelector("#scriptDirValue"),
+  scriptArgs: document.querySelector("#scriptArgs"),
   logsView: document.querySelector("#logsView"),
   validationView: document.querySelector("#validationView"),
   fileSearch: document.querySelector("#fileSearch"),
@@ -29,6 +36,8 @@ const el = {
   editor: document.querySelector("#editor"),
   dirtyState: document.querySelector("#dirtyState"),
   toast: document.querySelector("#toast"),
+  startButtons: [document.querySelector("#startTop"), document.querySelector("#startMain")],
+  stopButtons: [document.querySelector("#stopTop"), document.querySelector("#stopMain")],
 };
 
 function formatDuration(seconds) {
@@ -46,7 +55,13 @@ async function api(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-  const payload = await response.json();
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { error: text || response.statusText };
+  }
   if (!response.ok) {
     throw new Error(payload.error || `Request failed: ${response.status}`);
   }
@@ -77,6 +92,10 @@ function renderScripts() {
   });
   const groups = groupBy(scripts, "group");
   el.scriptList.innerHTML = "";
+  if (!scripts.length) {
+    el.scriptList.innerHTML = '<div class="empty-state">No scripts found.</div>';
+    return;
+  }
 
   for (const group of Object.keys(groups).sort()) {
     const label = document.createElement("div");
@@ -108,6 +127,10 @@ function renderFiles() {
   const query = el.fileSearch.value.trim().toLowerCase();
   const files = state.files.filter((file) => file.path.toLowerCase().includes(query));
   el.fileList.innerHTML = "";
+  if (!files.length) {
+    el.fileList.innerHTML = '<div class="empty-state">No files found.</div>';
+    return;
+  }
 
   for (const file of files) {
     const row = document.createElement("button");
@@ -125,11 +148,28 @@ function renderRunState(status = {}) {
   const selected = state.selectedScript;
   el.selectedScriptName.textContent = selected?.name || "None";
   el.activeScriptLabel.textContent = selected?.path || "No script selected";
+  el.scriptDirValue.textContent = selected?.path?.includes("/") ? selected.path.split("/").slice(0, -1).join("/") : "Repo root";
   el.processState.textContent = status.running ? "Running" : "Ready";
   el.runStatus.textContent = status.running ? `Running ${status.script}` : "Ready";
   el.uptime.textContent = formatDuration(status.uptime || 0);
   el.serverDot.classList.toggle("running", Boolean(status.running));
   state.running = Boolean(status.running);
+  for (const button of el.startButtons) {
+    button.disabled = !selected || state.running;
+  }
+  for (const button of el.stopButtons) {
+    button.disabled = !state.running;
+  }
+}
+
+function renderPortability() {
+  const portability = state.health?.portability;
+  if (!portability) {
+    return;
+  }
+  el.baselineValue.textContent = `${portability.baseWidth} x ${portability.baseHeight}`;
+  el.scalingValue.textContent = portability.scalingDisabled ? "Off" : "Auto";
+  el.templateScaleValue.textContent = portability.templateScales === "auto" ? "Auto" : portability.templateScales;
 }
 
 function renderDirtyState() {
@@ -141,8 +181,10 @@ function renderDirtyState() {
 async function refreshHealth() {
   try {
     const health = await api("/api/health");
+    state.health = health;
     el.serverStatus.textContent = health.local ? "Local" : health.status;
     el.serverDot.classList.remove("error");
+    renderPortability();
   } catch (error) {
     el.serverStatus.textContent = "Disconnected";
     el.serverDot.classList.add("error");
@@ -176,9 +218,13 @@ async function pollLogs() {
   const payload = await api(`/api/process/logs?after=${state.logCursor}`);
   state.logCursor = payload.latest;
   for (const entry of payload.logs) {
-    el.logsView.textContent += `[${new Date(entry.time * 1000).toLocaleTimeString()}] ${entry.text}\n`;
+    state.logLines.push(`[${new Date(entry.time * 1000).toLocaleTimeString()}] ${entry.text}`);
+  }
+  if (state.logLines.length > 1000) {
+    state.logLines = state.logLines.slice(-1000);
   }
   if (payload.logs.length) {
+    el.logsView.textContent = `${state.logLines.join("\n")}\n`;
     el.logsView.scrollTop = el.logsView.scrollHeight;
   }
 }
@@ -189,10 +235,18 @@ async function startScript() {
     return;
   }
   el.logsView.textContent = "";
+  state.logLines = [];
   state.logCursor = 0;
+  let args = [];
+  try {
+    args = parseCommandArgs(el.scriptArgs.value);
+  } catch (error) {
+    showToast(error.message);
+    return;
+  }
   const status = await api("/api/process/start", {
     method: "POST",
-    body: JSON.stringify({ path: state.selectedScript.path }),
+    body: JSON.stringify({ path: state.selectedScript.path, args }),
   });
   renderRunState(status);
   await refreshScripts();
@@ -264,6 +318,48 @@ function activateTab(view) {
   }
   el.logsView.classList.toggle("hidden", view !== "logs");
   el.validationView.classList.toggle("hidden", view !== "validation");
+}
+
+function parseCommandArgs(value) {
+  const args = [];
+  let current = "";
+  let quote = null;
+  let escaping = false;
+
+  for (const char of value.trim()) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+    } else if (char === "\\") {
+      escaping = true;
+    } else if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+    } else {
+      current += char;
+    }
+  }
+
+  if (escaping) {
+    current += "\\";
+  }
+  if (quote) {
+    throw new Error("Close the quoted argument first.");
+  }
+  if (current) {
+    args.push(current);
+  }
+  return args;
 }
 
 function escapeHtml(value) {

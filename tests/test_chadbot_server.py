@@ -32,6 +32,22 @@ def test_build_script_command_runs_from_script_directory():
     assert command[-1] == "--dry-run"
     assert cwd == script_path.parent
     assert str(server.REPO_ROOT) in env["PYTHONPATH"]
+    assert env["CHADBOT_REPO_ROOT"] == str(server.REPO_ROOT)
+    assert env["CHADBOT_SCRIPT_DIR"] == str(script_path.parent)
+    assert env["CHADBOT_SCRIPT_PATH"] == str(script_path)
+
+
+def test_portability_config_uses_safe_defaults(monkeypatch):
+    monkeypatch.setenv("CHADBOT_BASE_WIDTH", "nope")
+    monkeypatch.setenv("CHADBOT_BASE_HEIGHT", "-1")
+    monkeypatch.delenv("CHADBOT_TEMPLATE_SCALES", raising=False)
+
+    config = server.portability_config()
+
+    assert config["baseWidth"] == 1920
+    assert config["baseHeight"] == 1080
+    assert config["templateScales"] == "auto"
+    assert "CHADBOT_SCRIPT_DIR" in config["assetLookup"]
 
 
 def test_validate_edit_path_allows_new_safe_subfolder_file():

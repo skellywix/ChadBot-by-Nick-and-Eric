@@ -49,6 +49,26 @@ CORE_SCRIPTS = ("Recorder.py", "video_capture.py", "world_hopper.py")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
+def env_positive_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def portability_config() -> dict:
+    template_scales = os.environ.get("CHADBOT_TEMPLATE_SCALES", "").strip()
+    return {
+        "baseWidth": env_positive_int("CHADBOT_BASE_WIDTH", 1920),
+        "baseHeight": env_positive_int("CHADBOT_BASE_HEIGHT", 1080),
+        "scalingDisabled": os.environ.get("CHADBOT_DISABLE_SCALING", "").lower() in {"1", "true", "yes", "on"},
+        "templateScales": template_scales or "auto",
+        "assetLookup": ["base_dir", "CHADBOT_SCRIPT_DIR", "caller", "cwd", "repo"],
+        "repoRoot": str(REPO_ROOT),
+    }
+
+
 def is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -158,6 +178,9 @@ def build_script_command(script_path: Path, args: list[str] | None = None) -> tu
     current_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(REPO_ROOT) if not current_pythonpath else f"{REPO_ROOT}{os.pathsep}{current_pythonpath}"
     env["PYTHONUNBUFFERED"] = "1"
+    env["CHADBOT_REPO_ROOT"] = str(REPO_ROOT)
+    env["CHADBOT_SCRIPT_DIR"] = str(cwd)
+    env["CHADBOT_SCRIPT_PATH"] = str(script_path)
     return [sys.executable, "-u", script_path.name, *run_args], cwd, env
 
 
@@ -317,7 +340,13 @@ class ChadBotHandler(BaseHTTPRequestHandler):
 
     def _handle_api_get(self, path: str, query: dict) -> None:
         if path == "/api/health":
-            self._json({"name": "ChadBot", "status": "Ready", "root": str(REPO_ROOT), "local": True})
+            self._json({
+                "name": "ChadBot",
+                "status": "Ready",
+                "root": str(REPO_ROOT),
+                "local": True,
+                "portability": portability_config(),
+            })
         elif path == "/api/scripts":
             status = self.manager.status()
             scripts = discover_scripts()

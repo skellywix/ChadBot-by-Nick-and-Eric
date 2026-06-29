@@ -3,6 +3,7 @@ from pathlib import Path
 from pynput import mouse, keyboard
 from time import time
 import json
+import os
 
 
 OUTPUT_FILENAME = 'bank_fish'
@@ -16,6 +17,19 @@ unreleased_keys = []
 input_events = []
 # Store click event
 unreleased_click = False
+DISABLE_SCALING = os.environ.get("CHADBOT_DISABLE_SCALING", "").lower() in {"1", "true", "yes", "on"}
+
+
+def env_positive_int(name, default):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+BASE_WIDTH = env_positive_int("CHADBOT_BASE_WIDTH", 1920)
+BASE_HEIGHT = env_positive_int("CHADBOT_BASE_HEIGHT", 1080)
 
 
 class EventType:
@@ -36,6 +50,22 @@ def record_event(event_type, event_time, button, pos=None):
         print(f'{event_type} on {button} pos {pos} at {event_time}')
     else:
         print(f'{event_type} on {button} at {event_time}')
+
+
+def normalize_position(x, y):
+    if DISABLE_SCALING:
+        return int(round(x)), int(round(y))
+    try:
+        import pyautogui as pag
+
+        size = pag.size()
+        width = int(size.width) if hasattr(size, "width") else int(size[0])
+        height = int(size.height) if hasattr(size, "height") else int(size[1])
+    except Exception:
+        return int(round(x)), int(round(y))
+    if width <= 0 or height <= 0:
+        return int(round(x)), int(round(y))
+    return int(round(x * BASE_WIDTH / width)), int(round(y * BASE_HEIGHT / height))
 
 
 def on_press(key):
@@ -72,10 +102,11 @@ def on_release(key):
 
 
 def on_click(x, y, button, pressed):
+    pos = normalize_position(x, y)
     if pressed:
-        record_event(EventType.CLICKDOWN, elapsed_time(), button, (x, y))
+        record_event(EventType.CLICKDOWN, elapsed_time(), button, pos)
     if not pressed:
-        record_event(EventType.CLICKUP, elapsed_time(), button, (x, y))
+        record_event(EventType.CLICKUP, elapsed_time(), button, pos)
 
 
 def run_listeners():
