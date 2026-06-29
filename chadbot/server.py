@@ -709,10 +709,12 @@ def has_asset_extension(value: object) -> bool:
 
 def looks_like_path_reference(value: dict, force: bool = False) -> bool:
     raw = value["value"]
-    if isinstance(raw, Path):
+    if force:
+        return True
+    if is_absolute_reference(raw):
         return True
     text = str(raw)
-    return force or has_asset_extension(text) or "/" in text or "\\" in text
+    return has_asset_extension(text)
 
 
 def candidate_reference_paths(value: dict, script_path: Path) -> list[Path]:
@@ -894,6 +896,28 @@ def analyze_script(relative_script: str) -> dict:
             "missing": missing_count,
             "warnings": len(warnings),
         },
+    }
+
+
+def compact_script_analysis(analysis: dict) -> dict:
+    return {
+        "script": analysis["script"],
+        "status": analysis["status"],
+        "summary": analysis["summary"],
+        "importsFunctions": analysis["importsFunctions"],
+        "warnings": analysis["warnings"][:3],
+    }
+
+
+def analyze_scripts() -> dict:
+    analyses = [compact_script_analysis(analyze_script(script["path"])) for script in discover_scripts()]
+    counts = {"ok": 0, "warn": 0, "error": 0}
+    for analysis in analyses:
+        counts[analysis["status"]] = counts.get(analysis["status"], 0) + 1
+    return {
+        "generatedAt": time.time(),
+        "counts": counts,
+        "analyses": analyses,
     }
 
 
@@ -1182,6 +1206,8 @@ class ChadBotHandler(BaseHTTPRequestHandler):
         elif path == "/api/scripts/analyze":
             relative_path = self._first_query_value(query, "path")
             self._json({"analysis": analyze_script(relative_path)})
+        elif path == "/api/scripts/analysis":
+            self._json({"scriptHealth": analyze_scripts()})
         elif path == "/api/files/tree":
             self._json({"files": discover_editable_files()})
         elif path == "/api/settings":
