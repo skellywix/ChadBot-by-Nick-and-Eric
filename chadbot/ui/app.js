@@ -10,6 +10,8 @@ const state = {
   portability: null,
   diagnostics: null,
   scriptAnalysis: null,
+  scriptHealth: null,
+  scriptHealthByPath: {},
   settingsDirty: false,
   logCursor: 0,
   logLines: [],
@@ -26,6 +28,7 @@ const el = {
   scriptSearch: document.querySelector("#scriptSearch"),
   scriptList: document.querySelector("#scriptList"),
   refreshScripts: document.querySelector("#refreshScripts"),
+  scriptHealthSummary: document.querySelector("#scriptHealthSummary"),
   selectedScriptName: document.querySelector("#selectedScriptName"),
   activeScriptLabel: document.querySelector("#activeScriptLabel"),
   processState: document.querySelector("#processState"),
@@ -130,6 +133,9 @@ function renderScripts() {
     el.scriptList.append(label);
 
     for (const script of groups[group]) {
+      const health = state.scriptHealthByPath[script.path];
+      const healthStatus = health?.status || "pending";
+      const healthLabel = healthStatus === "error" ? "Fix" : healthStatus === "warn" ? "Review" : healthStatus === "ok" ? "Ready" : "Scan";
       const row = document.createElement("button");
       row.className = `script-row${state.selectedScript?.path === script.path ? " active" : ""}`;
       row.innerHTML = `
@@ -137,7 +143,10 @@ function renderScripts() {
           <strong>${escapeHtml(script.name)}</strong>
           <span>${escapeHtml(script.path)}</span>
         </span>
-        ${script.running ? '<span class="running-badge">RUN</span>' : ""}
+        <span class="script-row-badges">
+          <span class="script-health-badge ${escapeHtml(healthStatus)}">${escapeHtml(healthLabel)}</span>
+          ${script.running ? '<span class="running-badge">RUN</span>' : ""}
+        </span>
       `;
       row.addEventListener("click", () => {
         state.selectedScript = script;
@@ -150,6 +159,19 @@ function renderScripts() {
       el.scriptList.append(row);
     }
   }
+}
+
+function renderScriptHealthSummary() {
+  if (!state.scriptHealth) {
+    el.scriptHealthSummary.innerHTML = '<span>Scanning scripts</span>';
+    return;
+  }
+  const counts = state.scriptHealth.counts || {};
+  el.scriptHealthSummary.innerHTML = `
+    <span class="health-count ok"><strong>${escapeHtml(counts.ok || 0)}</strong> Ready</span>
+    <span class="health-count warn"><strong>${escapeHtml(counts.warn || 0)}</strong> Review</span>
+    <span class="health-count error"><strong>${escapeHtml(counts.error || 0)}</strong> Fix</span>
+  `;
 }
 
 function renderFiles() {
@@ -381,6 +403,16 @@ async function refreshScriptAnalysis() {
   renderScriptAnalysis();
 }
 
+async function refreshScriptHealth() {
+  const payload = await api("/api/scripts/analysis");
+  state.scriptHealth = payload.scriptHealth;
+  state.scriptHealthByPath = Object.fromEntries(
+    state.scriptHealth.analyses.map((analysis) => [analysis.script.path, analysis]),
+  );
+  renderScriptHealthSummary();
+  renderScripts();
+}
+
 async function refreshScripts() {
   const payload = await api("/api/scripts");
   state.scripts = payload.scripts;
@@ -391,7 +423,12 @@ async function refreshScripts() {
   }
   renderScripts();
   renderRunState(payload.status);
-  await refreshScriptAnalysis();
+  renderScriptAnalysis();
+}
+
+async function refreshScriptsAndHealth() {
+  await refreshScripts();
+  await Promise.all([refreshScriptAnalysis(), refreshScriptHealth()]);
 }
 
 async function refreshFiles() {
@@ -499,6 +536,9 @@ async function saveFile() {
   state.savedContent = state.fileContent;
   renderDirtyState();
   await refreshFiles();
+  if (payload.path.endsWith(".py")) {
+    await Promise.all([refreshScriptHealth(), refreshScriptAnalysis()]);
+  }
   showToast(`Saved ${payload.path}`);
 }
 
@@ -627,6 +667,17 @@ function activateTab(view) {
   el.setupView.classList.toggle("hidden", view !== "setup");
 }
 
+function runWhenVisible(task) {
+  if (document.visibilityState === "hidden") {
+    return;
+  }
+  task().catch(() => {});
+}
+
+function scheduleVisibleTask(task, intervalMs) {
+  return setInterval(() => runWhenVisible(task), intervalMs);
+}
+
 function parseCommandArgs(value) {
   const args = [];
   let current = "";
@@ -700,7 +751,7 @@ function bindEvents() {
   el.refreshDiagnostics.addEventListener("click", () => refreshDiagnostics().catch((error) => showToast(error.message)));
   el.installRequirements.addEventListener("click", () => installRequirements().catch((error) => showToast(error.message)));
   el.refreshScriptAnalysis.addEventListener("click", () => refreshScriptAnalysis().catch((error) => showToast(error.message)));
-  document.querySelector("#refreshScripts").addEventListener("click", () => refreshScripts().catch((error) => showToast(error.message)));
+  document.querySelector("#refreshScripts").addEventListener("click", () => refreshScriptsAndHealth().catch((error) => showToast(error.message)));
   document.querySelector("#refreshFiles").addEventListener("click", () => refreshFiles().catch((error) => showToast(error.message)));
   el.scriptSearch.addEventListener("input", renderScripts);
   el.fileSearch.addEventListener("input", renderFiles);
@@ -724,11 +775,21 @@ function bindEvents() {
 async function init() {
   bindEvents();
   await refreshHealth();
-  await Promise.all([refreshSettings(), refreshDiagnostics(), refreshSetupStatus(), refreshScripts(), refreshFiles()]);
-  setInterval(() => refreshStatus().catch(() => {}), 1000);
-  setInterval(() => pollLogs().catch(() => {}), 900);
-  setInterval(() => refreshSetupStatus().catch(() => {}), 1400);
-  setInterval(() => pollSetupLogs().catch(() => {}), 1000);
+  await Promise.all([refreshSettings(), refreshDiagnostics(), refreshSetupStatus(), refreshFiles()]);
+  await refreshScripts();
+  await Promise.all([refreshScriptAnalysis(), refreshScriptHealth()]);
+  scheduleVisibleTask(refreshStatus, 1000);
+  scheduleVisibleTask(pollLogs, 900);
+  scheduleVisibleTask(refreshSetupStatus, 1400);
+  scheduleVisibleTask(pollSetupLogs, 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      refreshStatus().catch(() => {});
+      refreshSetupStatus().catch(() => {});
+      pollLogs().catch(() => {});
+      pollSetupLogs().catch(() => {});
+    }
+  });
   if (state.files.length) {
     const readme = state.files.find((file) => file.path === "README.md") || state.files[0];
     await loadFile(readme.path);

@@ -115,6 +115,22 @@ def test_analyze_script_warns_about_hardcoded_absolute_paths(monkeypatch, tmp_pa
     assert any(warning["label"] == "Hardcoded path" for warning in analysis["warnings"])
 
 
+def test_analyze_script_ignores_regex_strings(monkeypatch, tmp_path):
+    root = tmp_path
+    script_dir = root / "scripts" / "demo"
+    script_dir.mkdir(parents=True)
+    (script_dir / "demo.py").write_text(
+        "import re\ntext = '123'\nvalue = re.findall(r'\\d+', text)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "REPO_ROOT", root)
+
+    analysis = server.analyze_script("scripts/demo/demo.py")
+
+    assert analysis["status"] == "ok"
+    assert analysis["assetReferences"] == []
+
+
 def test_analyze_script_rejects_non_bot_files(monkeypatch, tmp_path):
     root = tmp_path
     (root / "tool.py").write_text("print('nope')\n", encoding="utf-8")
@@ -122,6 +138,29 @@ def test_analyze_script_rejects_non_bot_files(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="bot scripts"):
         server.analyze_script("tool.py")
+
+
+def test_analyze_scripts_returns_counts_and_compact_warnings(monkeypatch, tmp_path):
+    root = tmp_path
+    ok_dir = root / "scripts" / "ok"
+    warn_dir = root / "scripts" / "warn"
+    error_dir = root / "scripts" / "error"
+    ok_dir.mkdir(parents=True)
+    warn_dir.mkdir(parents=True)
+    error_dir.mkdir(parents=True)
+    (ok_dir / "needle.png").write_bytes(b"image")
+    (ok_dir / "ok.py").write_text("import functions as f\nf.find('needle.png')\n", encoding="utf-8")
+    (warn_dir / "warn.py").write_text("import pyautogui as pag\npag.click(10, 10)\n", encoding="utf-8")
+    (error_dir / "error.py").write_text("import functions as f\nf.find('missing.png')\n", encoding="utf-8")
+    monkeypatch.setattr(server, "REPO_ROOT", root)
+
+    payload = server.analyze_scripts()
+
+    assert payload["counts"] == {"ok": 1, "warn": 1, "error": 1}
+    analyses_by_path = {item["script"]["path"]: item for item in payload["analyses"]}
+    assert analyses_by_path["scripts/ok/ok.py"]["warnings"] == []
+    assert analyses_by_path["scripts/warn/warn.py"]["warnings"][0]["label"] == "Portability helpers"
+    assert analyses_by_path["scripts/error/error.py"]["summary"]["missing"] == 1
 
 
 def test_portability_config_uses_safe_defaults(monkeypatch):

@@ -25,6 +25,7 @@ The UI provides:
 - Script discovery across the core scripts and `scripts/` activity folders.
 - Start and stop controls for bot scripts.
 - Runtime controls for coordinate baseline, scaling, template scales, and script arguments.
+- Script health scanning with Ready / Review / Fix counts, per-script badges, and selected-script asset/path warnings.
 - A readiness panel for Python packages, screen access, scripts, assets, and runtime storage.
 - A controlled setup action for installing the repo's Python requirements, with setup logs in the UI.
 - Live stdout/stderr logs from the running bot process.
